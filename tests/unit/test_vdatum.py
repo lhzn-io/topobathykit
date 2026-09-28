@@ -62,3 +62,88 @@ def test_vdatum_missing_tz_raises_value_error() -> None:
 
         with pytest.raises(ValueError, match="VDatum API returned no elevation data"):
             VDatumResolver.get_mllw_to_navd88_offset(43.0, -70.0)
+
+
+def _ok(value: str = "1.5") -> MagicMock:
+    response = MagicMock()
+    response.json.return_value = {"t_z": value}
+    response.raise_for_status.return_value = None
+    return response
+
+
+def test_vdatum_retries_read_timeouts_with_backoff() -> None:
+    """Transient timeouts are retried with exponential backoff, then succeed."""
+    import requests
+
+    from topobathysim.vdatum import VDATUM_BACKOFF_S
+
+    with (
+        patch("topobathysim.vdatum.requests.Session.get") as mock_get,
+        patch("topobathysim.vdatum.time.sleep") as mock_sleep,
+    ):
+        mock_get.side_effect = [requests.ReadTimeout("read timed out"), requests.ReadTimeout("again"), _ok()]
+        VDatumResolver.get_mllw_to_navd88_offset.cache_clear()
+
+        assert VDatumResolver.get_mllw_to_navd88_offset(43.0, -70.0) == 1.5
+
+    assert mock_get.call_count == 3
+    assert [c.args[0] for c in mock_sleep.call_args_list] == [VDATUM_BACKOFF_S, 2 * VDATUM_BACKOFF_S]
+
+
+def test_vdatum_gives_up_after_bounded_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A persistent outage raises VDatumUnavailableError after a bounded number of attempts."""
+    import requests
+
+    from topobathysim.vdatum import VDatumUnavailableError
+
+    monkeypatch.setenv("TOPOBATHY_VDATUM_ATTEMPTS", "4")
+    with (
+        patch("topobathysim.vdatum.requests.Session.get") as mock_get,
+        patch("topobathysim.vdatum.time.sleep"),
+    ):
+        mock_get.side_effect = requests.ReadTimeout("read timed out")
+        VDatumResolver.get_mllw_to_navd88_offset.cache_clear()
+
+        with pytest.raises(VDatumUnavailableError, match="after 4 attempt"):
+            VDatumResolver.get_mllw_to_navd88_offset(43.0, -70.0)
+
+    assert mock_get.call_count == 4
+
+
+def test_vdatum_does_not_retry_client_errors() -> None:
+    """A 4xx response is not transient and is raised on the first attempt."""
+    import requests
+
+    response = MagicMock()
+    response.status_code = 400
+    response.raise_for_status.side_effect = requests.HTTPError("400 Bad Request", response=response)
+    with (
+        patch("topobathysim.vdatum.requests.Session.get", return_value=response) as mock_get,
+        patch("topobathysim.vdatum.time.sleep") as mock_sleep,
+    ):
+        VDatumResolver.get_mllw_to_navd88_offset.cache_clear()
+
+        with pytest.raises(requests.HTTPError):
+            VDatumResolver.get_mllw_to_navd88_offset(43.0, -70.0)
+
+    assert mock_get.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+def test_vdatum_outage_is_not_mistaken_for_no_coverage() -> None:
+    """The robust search must not treat an outage as a NoData point and probe a ring of points."""
+    import requests
+
+    from topobathysim.vdatum import VDatumUnavailableError
+
+    with (
+        patch("topobathysim.vdatum.requests.Session.get") as mock_get,
+        patch("topobathysim.vdatum.time.sleep"),
+    ):
+        mock_get.side_effect = requests.ConnectionError("connection refused")
+        VDatumResolver.get_mllw_to_navd88_offset.cache_clear()
+
+        with pytest.raises(VDatumUnavailableError):
+            VDatumResolver.get_robust_mllw_to_navd88_offset(43.0, -70.0)
+
+    assert mock_get.call_count == 3
