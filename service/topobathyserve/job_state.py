@@ -53,16 +53,44 @@ def read_state(job_id: str) -> dict[str, Any] | None:
     except (json.JSONDecodeError, OSError):
         return None
 
-    # If status is running/pending, check if the subprocess is still alive
-    if state.get("status") in ("running", "pending"):
-        pid = state.get("pid")
-        if pid and not _pid_alive(pid):
-            state["status"] = "failed"
-            state["error"] = f"Worker process {pid} died (likely OOM)"
-            # Update the file so subsequent reads don't re-check
-            write_state(job_id, state)
+    return _reconcile_dead_worker(job_id, state)
 
-    return state
+
+def _reconcile_dead_worker(job_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    """Mark a running/pending job as failed when its worker process is gone.
+
+    A worker killed by the kernel OOM killer or by a container restart never
+    writes a terminal state itself, so without this the job would stay
+    `running` indefinitely.
+    """
+    if state.get("status") not in ("running", "pending"):
+        return state
+    pid = state.get("pid")
+    if not pid:
+        return state
+    reason = _worker_dead_reason(int(pid), state.get("pid_start_ticks"))
+    if reason is None:
+        return state
+
+    # Re-read before writing: the worker may have recorded completion between
+    # our read and the liveness check, and that must not be overwritten.
+    try:
+        current: dict[str, Any] = json.loads(job_path(job_id).read_text())
+    except (json.JSONDecodeError, OSError):
+        current = state
+    if current.get("status") not in ("running", "pending"):
+        return current
+
+    current["status"] = "failed"
+    current["failure_reason"] = "worker_died"
+    current["error"] = (
+        f"Hydration worker process {pid} {reason} without recording completion "
+        "(likely killed by the OOM killer or a container restart)"
+    )
+    current["finished_at"] = datetime.now(timezone.utc).isoformat()
+    # Update the file so subsequent reads don't re-check
+    write_state(job_id, current)
+    return current
 
 
 def list_jobs(max_age_hours: float = 24) -> list[dict[str, Any]]:
@@ -75,6 +103,7 @@ def list_jobs(max_age_hours: float = 24) -> list[dict[str, Any]]:
             state = json.loads(f.read_text())
         except (json.JSONDecodeError, OSError):
             continue
+        state = _reconcile_dead_worker(state.get("id") or f.stem, state)
         # Prune old completed/failed jobs
         submitted = state.get("submitted_at", "")
         try:
@@ -101,3 +130,49 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         # Process exists but we can't signal it — still alive
         return True
+
+
+def _read_proc_stat(pid: int) -> tuple[str, int] | None:
+    """Return (state letter, start time in clock ticks since boot) from /proc/<pid>/stat.
+
+    Returns None where /proc is unavailable or the process does not exist.
+    """
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return None
+    # The command name (field 2) is parenthesised and may contain spaces, so split
+    # after its closing parenthesis. The fields after it start at field 3 (state);
+    # starttime is field 22.
+    try:
+        rest = raw[raw.rindex(")") + 2 :].split()
+        return rest[0], int(rest[19])
+    except (ValueError, IndexError):
+        return None
+
+
+def process_start_ticks(pid: int) -> int | None:
+    """Start time of `pid` in clock ticks since boot, recorded to detect PID reuse."""
+    stat = _read_proc_stat(pid)
+    return stat[1] if stat else None
+
+
+def _worker_dead_reason(pid: int, start_ticks: int | None = None) -> str | None:
+    """Return why the worker `pid` should be treated as dead, or None if it is alive.
+
+    Besides a missing PID, this catches two cases that `os.kill(pid, 0)` reports
+    as alive: a zombie (the worker exited but the server has not reaped it yet),
+    and a PID reused by an unrelated process after a container restart, detected
+    by comparing the recorded start time.
+    """
+    if not _pid_alive(pid):
+        return "is no longer running"
+    stat = _read_proc_stat(pid)
+    if stat is None:
+        return None
+    state_letter, ticks = stat
+    if state_letter in ("Z", "X"):
+        return "exited (zombie)"
+    if start_ticks is not None and ticks != int(start_ticks):
+        return "is no longer running (PID reused by another process)"
+    return None

@@ -137,6 +137,20 @@ class ProviderNoDataError(LookupError):
     """
 
 
+class ProviderFetchError(RuntimeError):
+    """Raised when a provider covers the bbox but failed to deliver its data.
+
+    Distinct from `ProviderNoDataError`: the failure came from an error while
+    fetching (network timeout, VDatum outage, MemoryError, merge failure), not
+    from a lack of coverage, so a retry may succeed. The runtime records the
+    step as failed and the cell is not cached.
+
+    Providers that return data despite dropping some tiles or projects to
+    errors signal the partial result instead through an integer
+    ``attrs["fetch_errors"]`` on the returned Dataset.
+    """
+
+
 class Provider(ABC):
     """
     Abstract Base Class for TopoBathySim data providers.

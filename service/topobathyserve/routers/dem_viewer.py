@@ -52,6 +52,30 @@ def _read_cell_attrs(cell_path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _cell_mtime(cell_path: Path) -> float:
+    """Return the latest modification time of a zarr cell directory.
+
+    A cell rewritten in place by hydrate is moved into position as a whole
+    directory, so its own mtime and that of its metadata files reflect the write.
+    """
+    mtime = 0.0
+    for p in (cell_path, cell_path / ".zmetadata", cell_path / ".zattrs", cell_path / "zarr.json"):
+        try:
+            mtime = max(mtime, p.stat().st_mtime)
+        except OSError:
+            continue
+    return mtime
+
+
+def _cells_newer_than(cell_mtimes: list[float], cache_file: Path) -> bool:
+    """True when any cell was written after `cache_file`, so the mosaic sidecar is stale."""
+    try:
+        built = cache_file.stat().st_mtime
+    except OSError:
+        return True
+    return any(m > built for m in cell_mtimes)
+
+
 def _parse_cell_bbox(attrs: dict[str, Any]) -> list[float] | None:
     cb = attrs.get("cell_bbox")
     if cb is None:
@@ -477,7 +501,8 @@ async def get_elevation_binary(
     policy_prefix, dx, dy, cluster_bbox = _parse_dataset_id(root, dataset_id)
     policy_dir = _resolve_policy_dir(root, policy_prefix)
 
-    # Check for cached binary (invalidate if cell count changed)
+    # Check for cached binary (invalidate if cell count or canvas changed, or if any
+    # cell was rewritten after the binary was built)
     cache_bin = policy_dir / f"_mosaic_{dataset_id}.bin"
     cache_meta_file = policy_dir / f"_mosaic_{dataset_id}.json"
 
@@ -486,6 +511,7 @@ async def get_elevation_binary(
         try:
             cached = json.loads(cache_meta_file.read_text())
             current_cells = 0
+            cell_mtimes: list[float] = []
             x_min_check = float("inf")
             x_max_check = float("-inf")
             y_min_check = float("inf")
@@ -499,6 +525,7 @@ async def get_elevation_binary(
                 if not _cell_in_cluster(a, cluster_bbox):
                     continue
                 current_cells += 1
+                cell_mtimes.append(_cell_mtime(cp))
                 x_min_check = min(x_min_check, a.get("_x_min", x_min_check))
                 x_max_check = max(x_max_check, a.get("_x_max", x_max_check))
                 y_min_check = min(y_min_check, a.get("_y_min", y_min_check))
@@ -509,17 +536,20 @@ async def get_elevation_binary(
                 expected_w, expected_h, _ = _clamp_dims(natural_w, natural_h, MOSAIC_BUILD_MAX_DIM)
             else:
                 expected_w = expected_h = 0
+            cells_rewritten = _cells_newer_than(cell_mtimes, cache_bin)
             if (
                 cached.get("cell_count") == current_cells
                 and cached.get("width") == expected_w
                 and cached.get("height") == expected_h
+                and not cells_rewritten
             ):
                 cache_valid = True
             else:
                 logger.info(
                     f"DEM mosaic cache stale: {cached.get('cell_count')} -> {current_cells} cells, "
                     f"dims {cached.get('width')}x{cached.get('height')} -> "
-                    f"{expected_w}x{expected_h}, rebuilding"
+                    f"{expected_w}x{expected_h}, cells rewritten since build: {cells_rewritten}, "
+                    "rebuilding"
                 )
         except Exception:
             pass
@@ -632,6 +662,7 @@ async def get_provenance_binary(
         try:
             cached = json.loads(cache_meta_file.read_text())
             current_cells = 0
+            cell_mtimes: list[float] = []
             x_min_check = float("inf")
             x_max_check = float("-inf")
             y_min_check = float("inf")
@@ -645,6 +676,7 @@ async def get_provenance_binary(
                 if not _cell_in_cluster(a, cluster_bbox):
                     continue
                 current_cells += 1
+                cell_mtimes.append(_cell_mtime(cp))
                 x_min_check = min(x_min_check, a.get("_x_min", x_min_check))
                 x_max_check = max(x_max_check, a.get("_x_max", x_max_check))
                 y_min_check = min(y_min_check, a.get("_y_min", y_min_check))
@@ -659,6 +691,7 @@ async def get_provenance_binary(
                 cached.get("cell_count") == current_cells
                 and cached.get("width") == expected_w
                 and cached.get("height") == expected_h
+                and not _cells_newer_than(cell_mtimes, cache_bin)
             ):
                 cache_valid = True
         except Exception:
@@ -788,13 +821,13 @@ async def get_cell_at(
 
 @router.delete("/datasets/{dataset_id}/cache")
 async def clear_dataset_cache(dataset_id: str) -> dict[str, Any]:
-    """Delete the cached mosaic binary so the next load rebuilds from zarr cells."""
+    """Delete the cached mosaic binaries so the next load rebuilds from zarr cells."""
     root = _fused_zarr_root()
     policy_prefix, _dx, _dy, _bbox = _parse_dataset_id(root, dataset_id)
     policy_dir = _resolve_policy_dir(root, policy_prefix)
 
     deleted = []
-    for suffix in (".bin", ".json"):
+    for suffix in (".bin", ".json", "_provenance.bin"):
         f = policy_dir / f"_mosaic_{dataset_id}{suffix}"
         if f.exists():
             f.unlink()

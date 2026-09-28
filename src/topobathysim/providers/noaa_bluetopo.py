@@ -25,8 +25,14 @@ from shapely.geometry import Point, box
 from ..config import get_cache_root
 from ..quality import QualityClass
 from ..runtime import should_consolidate
-from ..vdatum import VDatumResolver
-from .base import Provider, ProviderNoDataError, interpolate_small_gaps, sanitize_elevation_nodata
+from ..vdatum import VDatumNoDataError, VDatumResolver
+from .base import (
+    Provider,
+    ProviderFetchError,
+    ProviderNoDataError,
+    interpolate_small_gaps,
+    sanitize_elevation_nodata,
+)
 from .registry import registry
 
 logger = logging.getLogger(__name__)
@@ -471,10 +477,24 @@ class NoaaBlueTopoProvider(Provider):
         # 2. Fetch/Load Tiles
         das = []
         provenance_dict = {}
+        # Tiles lost to errors (as opposed to no coverage). The runtime refuses to
+        # cache a cell when this is non-zero, so the loss is retried.
+        fetch_errors: list[str] = []
         for tid in tile_ids:
             # Pass the query bbox to maximize efficiency if underlying method supports it
             # defaulting to full tile load via existing method
-            ds = self.load_tile_as_da(tid, bbox)
+            try:
+                ds = self.load_tile_as_da(tid, bbox)
+            except ProviderFetchError as e:
+                logger.warning(f"BlueTopo tile {tid} failed: {e}")
+                fetch_errors.append(f"{tid}: {e}")
+                continue
+            if ds is not None and "elevation" not in ds:
+                logger.warning(
+                    f"BlueTopo tile {tid} loaded without an elevation variable; treating as failed"
+                )
+                fetch_errors.append(f"{tid}: no elevation variable")
+                continue
             if ds is not None:
                 import hashlib
 
@@ -594,7 +614,17 @@ class NoaaBlueTopoProvider(Provider):
                 das.append(p_ds)
 
         if not das:
+            if fetch_errors:
+                raise ProviderFetchError(
+                    f"BlueTopo fetch failed for bbox {bbox} with {len(fetch_errors)} error(s); "
+                    f"first: {fetch_errors[0]}"
+                )
             raise ProviderNoDataError(f"Failed to load any BlueTopo data for bbox {bbox}")
+        if fetch_errors:
+            logger.warning(
+                f"BlueTopo returned partial data for bbox {bbox}: {len(fetch_errors)} error(s); "
+                f"first: {fetch_errors[0]}"
+            )
 
         # 3. Handle Mixed CRSs (e.g. crossing UTM zones)
         # If tiles are in different CRSs, merge_arrays will fail or produce garbage.
@@ -695,6 +725,8 @@ class NoaaBlueTopoProvider(Provider):
             except Exception as e:
                 logger.error(f"Failed to merge BlueTopo tiles: {e}")
                 merged = das[0]  # Fallback
+                # The fallback keeps only the first tile, so the result is partial.
+                fetch_errors.append(f"merge {type(e).__name__}: {e}")
 
         # Fill small seam gaps before clipping/reprojection.
         merged = self._fill_small_seams(merged, label="BlueTopo:seam-fill")
@@ -837,6 +869,7 @@ class NoaaBlueTopoProvider(Provider):
 
         merged["elevation"].name = "elevation"
         merged.attrs["provenance_dict"] = provenance_dict
+        merged.attrs["fetch_errors"] = len(fetch_errors)
         logger.debug("Found BlueTopo Coverage")
 
         from typing import cast
@@ -1360,14 +1393,29 @@ class NoaaBlueTopoProvider(Provider):
                     ds_to_cache.attrs["vertical_datum"] = "NAVD88"
                 else:
                     logger.warning(f"Suspicious VDatum offset {offset} for {tile_id}, dropping tile.")
-                    return xr.Dataset()
+                    return None
 
+            except VDatumNoDataError as e:
+                # No VDatum model near this tile: a property of the location, not an
+                # outage, so dropping the tile is the stable outcome.
+                logger.warning(
+                    f"VDatum has no MLLW->NAVD88 coverage for BlueTopo tile {tile_id}: {e}. "
+                    "Dropping tile to prevent artificial cliffs."
+                )
+                return None
             except Exception as e:
+                # Timeouts or other API failures. Previously this returned an empty
+                # Dataset, which fetch_layer then indexed for "elevation" and failed
+                # the whole step with an unrelated KeyError. Raise the transient
+                # signal instead so the cell is not cached and is retried.
                 logger.warning(
                     f"VDatum conversion failed for BlueTopo tile {tile_id}: {e}. "
                     "Dropping dataset to prevent artificial cliffs."
                 )
-                return xr.Dataset()
+                raise ProviderFetchError(
+                    f"VDatum MLLW->NAVD88 conversion failed for BlueTopo tile {tile_id}: "
+                    f"{type(e).__name__}: {e}"
+                ) from e
 
             ds_to_cache = self._stash_cache_crs(ds_to_cache)
             ds_to_cache = self._ensure_dataset_spatial_ref(ds_to_cache)
@@ -1435,9 +1483,15 @@ class NoaaBlueTopoProvider(Provider):
                     logger.info(msg)
                     return cached_ds
 
+        except ProviderFetchError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to stream/cache BlueTopo tile {tile_id}: {e}")
-            return None
+            logger.error(f"Failed to stream/cache BlueTopo tile {tile_id}: {type(e).__name__}: {e}")
+            if "404" in str(e):
+                return None
+            raise ProviderFetchError(
+                f"Failed to stream/cache BlueTopo tile {tile_id}: {type(e).__name__}: {e}"
+            ) from e
         finally:
             if da_raw is not None:
                 with contextlib.suppress(Exception):

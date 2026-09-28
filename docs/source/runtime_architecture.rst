@@ -67,6 +67,17 @@ Providers are standardized adapters that fetch data from remote sources.
   ``ProviderNoDataError`` (a ``LookupError`` subclass).  This is a normal operating
   condition — the runtime skips the provider silently at ``DEBUG`` log level.  Only
   genuine unexpected failures are logged at ``ERROR`` with a traceback.
+- **Fetch-Error Signalling**: When a provider has coverage but fails to deliver it
+  (network timeout, VDatum outage, ``MemoryError``), it raises ``ProviderFetchError``.
+  When it returns data but dropped some tiles or projects to errors, it sets an
+  integer ``attrs["fetch_errors"]`` on the returned Dataset.  The runtime records a
+  per-step outcome (``ok``, ``nodata``, ``partial`` or ``error``, with the pixel count
+  each step contributed) in the cell attribute ``step_outcomes_json``.  ``hydrate``
+  does not cache a cell with any ``partial`` or ``error`` step, or whose NaN fraction
+  exceeds ``TOPOBATHY_MAX_CELL_NAN_FRACTION`` (default 0.01); such cells count as
+  ``failed`` and are retried on the next run.  ``run`` (the ``/fuse`` and tile path)
+  applies only the step check: it still returns an incomplete cell but does not
+  cache it.
 
 Provenance System
 -----------------

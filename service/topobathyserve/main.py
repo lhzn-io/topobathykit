@@ -1670,6 +1670,9 @@ def _hydrate_subprocess(
         return
     state["status"] = "running"
     state["pid"] = os.getpid()
+    # Start time lets readers tell this worker apart from a later process that
+    # reuses the PID (e.g. after a container restart).
+    state["pid_start_ticks"] = job_state.process_start_ticks(os.getpid())
     job_state.write_state(job_id, state)
 
     def _on_progress(stats: dict[str, int]) -> None:
@@ -2111,12 +2114,18 @@ async def analyze_coverage(
                         ):
                             continue
 
-                        provider.set_active_project(name)  # type: ignore[attr-defined]
-                        tiles = provider.resolve_tiles_in_bbox(w, s, east, n)  # type: ignore[attr-defined]
+                        # Pass the project explicitly: the provider is a process-wide
+                        # singleton shared with concurrent requests.
+                        provider._load_tile_index(name)  # type: ignore[attr-defined]
+                        tiles = provider.resolve_tiles_in_bbox(  # type: ignore[attr-defined]
+                            w, s, east, n, project_id=name
+                        )
                         has_data = False
                         for t in tiles:
                             try:
-                                da = provider.fetch_tile(t, request.bbox)  # type: ignore[attr-defined]
+                                da = provider.fetch_tile(  # type: ignore[attr-defined]
+                                    t, request.bbox, project_id=name
+                                )
                                 if da is not None and int(da.notnull().sum()) > 0:
                                     has_data = True
                                     break

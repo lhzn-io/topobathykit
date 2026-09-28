@@ -1,14 +1,13 @@
 import logging
 import os
 import sqlite3
+import time
 from collections.abc import Callable
 from functools import lru_cache, wraps
 from pathlib import Path
 from typing import Any
 
 import requests  # type: ignore
-from requests.adapters import HTTPAdapter  # type: ignore
-from urllib3.util.retry import Retry  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +116,29 @@ class VDatumNoDataError(VDatumError):
     pass
 
 
+class VDatumUnavailableError(VDatumError):
+    """Raised when the VDatum API stays unreachable (timeouts, 5xx) after bounded retries.
+
+    Unlike `VDatumNoDataError`, this says nothing about the location, so callers
+    should treat it as transient rather than as a lack of coverage.
+    """
+
+
+# Bounded retry for the VDatum API. Worst case per request with the defaults:
+# 3 attempts x 10 s read timeout + 2 s + 4 s backoff = 36 s.
+VDATUM_TIMEOUT_S = 10.0
+VDATUM_BACKOFF_S = 2.0
+_VDATUM_RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
+def _vdatum_max_attempts() -> int:
+    """Number of VDatum API attempts, from TOPOBATHY_VDATUM_ATTEMPTS (default 3, minimum 1)."""
+    try:
+        return max(1, int(os.environ.get("TOPOBATHY_VDATUM_ATTEMPTS", "3")))
+    except ValueError:
+        return 3
+
+
 class VDatumResolver:
     """
     Resolves vertical datum offsets between NAVD88 and Local Mean Sea Level (LMSL)
@@ -127,23 +149,55 @@ class VDatumResolver:
 
     @staticmethod
     def _get_session() -> requests.Session:
-        """Creates a session with retries for robust API calls."""
+        """Creates a session for VDatum API calls.
+
+        Retries are handled in `_get_json` rather than by a urllib3 adapter, so
+        that timeouts are retried a bounded number of times and not multiplied
+        by a second retry layer.
+        """
         session = requests.Session()
         ua = (
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(HTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         session.headers.update({"User-Agent": ua})
-        retry = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[500, 502, 503, 504],
-            allowed_methods=["GET"],
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        session.mount("https://", adapter)
-        session.mount("http://", adapter)
         return session
+
+    @staticmethod
+    def _get_json(params: dict[str, Any]) -> Any:
+        """GET the VDatum API and return the decoded JSON body.
+
+        Timeouts, connection errors and retryable HTTP statuses are retried with
+        exponential backoff up to `_vdatum_max_attempts()` attempts, after which
+        `VDatumUnavailableError` is raised. Other HTTP errors raise immediately.
+        """
+        attempts = _vdatum_max_attempts()
+        session = VDatumResolver._get_session()
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                response = session.get(VDatumResolver.VDATUM_API, params=params, timeout=VDATUM_TIMEOUT_S)
+                response.raise_for_status()
+                return response.json()
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_exc = e
+            except requests.HTTPError as e:
+                status = getattr(e.response, "status_code", None)
+                if status not in _VDATUM_RETRY_STATUS:
+                    raise
+                last_exc = e
+
+            if attempt < attempts:
+                delay = VDATUM_BACKOFF_S * (2 ** (attempt - 1))
+                logger.warning(
+                    f"VDatum API attempt {attempt}/{attempts} failed ({type(last_exc).__name__}: "
+                    f"{last_exc}); retrying in {delay:.0f} s"
+                )
+                time.sleep(delay)
+
+        raise VDatumUnavailableError(
+            f"VDatum API unavailable after {attempts} attempt(s): {type(last_exc).__name__}: {last_exc}"
+        ) from last_exc
 
     @staticmethod
     @lru_cache(maxsize=1024)
@@ -167,10 +221,7 @@ class VDatumResolver:
         }
 
         try:
-            session = VDatumResolver._get_session()
-            response = session.get(VDatumResolver.VDATUM_API, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            data = VDatumResolver._get_json(params)
 
             if "t_z" in data:
                 val = float(data["t_z"])
@@ -208,10 +259,7 @@ class VDatumResolver:
         }
 
         try:
-            session = VDatumResolver._get_session()
-            response = session.get(VDatumResolver.VDATUM_API, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            data = VDatumResolver._get_json(params)
 
             if "t_z" in data:
                 # If s_z=0, t_z is the height of MLLW zero in NAVD88 frame.
@@ -251,10 +299,7 @@ class VDatumResolver:
         }
 
         try:
-            session = VDatumResolver._get_session()
-            response = session.get(VDatumResolver.VDATUM_API, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            data = VDatumResolver._get_json(params)
 
             if "t_z" in data:
                 val = float(data["t_z"])
@@ -291,10 +336,7 @@ class VDatumResolver:
         }
 
         try:
-            session = VDatumResolver._get_session()
-            response = session.get(VDatumResolver.VDATUM_API, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+            data = VDatumResolver._get_json(params)
 
             if "t_z" in data:
                 val = float(data["t_z"])
