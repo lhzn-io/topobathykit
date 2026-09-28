@@ -1,6 +1,6 @@
 # TopoBathySim
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ![TopoBathySim 3D DEM Viewer](docs/source/_static/dem-viewer.png)
