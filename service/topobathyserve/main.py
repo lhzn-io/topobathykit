@@ -1670,6 +1670,9 @@ def _hydrate_subprocess(
         return
     state["status"] = "running"
     state["pid"] = os.getpid()
+    # Start time lets readers tell this worker apart from a later process that
+    # reuses the PID (e.g. after a container restart).
+    state["pid_start_ticks"] = job_state.process_start_ticks(os.getpid())
     job_state.write_state(job_id, state)
 
     def _on_progress(stats: dict[str, int]) -> None:
