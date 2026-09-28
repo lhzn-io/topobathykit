@@ -9,7 +9,6 @@ fraction is within the configured ceiling.
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -122,6 +121,18 @@ _PROVIDERS: dict[str, type[Provider]] = {
 }
 
 
+class _DaemonProcess:
+    """A view of the current process that reports daemon=True and delegates the rest."""
+
+    daemon = True
+
+    def __init__(self, real: Any) -> None:
+        self._real = real
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TOPOBATHYSIM_CACHE_DIR", str(tmp_path / "cache"))
@@ -131,7 +142,10 @@ def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _Flaky.healthy = False
     # hydrate() takes the thread-pool path inside a daemon process. Outside one it
     # uses ProcessPoolExecutor(fork), whose nested worker cannot be pickled.
-    monkeypatch.setattr(runtime.multiprocessing, "current_process", lambda: SimpleNamespace(daemon=True))
+    # runtime.multiprocessing is the shared module, so the stand-in must keep every
+    # other attribute of the real process: numcodecs' Blosc (zarr 2) reads .pid.
+    real = runtime.multiprocessing.current_process()
+    monkeypatch.setattr(runtime.multiprocessing, "current_process", lambda: _DaemonProcess(real))
 
 
 def _policy(tmp_path: Path, steps: list[str]) -> str:
