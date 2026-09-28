@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,8 +9,29 @@ from topobathyserve.main import app, get_policy_path
 
 client = TestClient(app)
 
-# Override the policy path dependency to avoid 503
-app.dependency_overrides[get_policy_path] = lambda: Path("/tmp/dummy_policy.yaml")
+_DEFAULT_POLICY = """
+name: default_policy
+crs: EPSG:4326
+variables:
+  - name: elevation
+    steps:
+      - provider: gebco_2025
+"""
+
+
+@pytest.fixture(autouse=True)
+def _policy_path(tmp_path: Path) -> Iterator[None]:
+    """Point get_policy_path at a real policy file for these tests only.
+
+    The /fuse handlers load the policy to log its hash before calling run(), so the
+    file must exist. The override is removed afterwards so it cannot leak into other
+    test modules that share the app.
+    """
+    policy = tmp_path / "default_policy.yaml"
+    policy.write_text(_DEFAULT_POLICY)
+    app.dependency_overrides[get_policy_path] = lambda: policy
+    yield
+    app.dependency_overrides.pop(get_policy_path, None)
 
 
 @pytest.fixture

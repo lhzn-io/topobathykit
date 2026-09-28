@@ -231,6 +231,30 @@ def _build_zarr_attrs(
     }
 
 
+def _zarr_zip_response(ds_out: xr.Dataset) -> FileResponse:
+    """Write `ds_out` as a consolidated Zarr v2 store, zip it, and stream the archive.
+
+    zarr_format=2 keeps the export readable by Zarr.jl, which also needs an explicit
+    fill value on the integer source_elevation array. The fill value goes in encoding
+    only: xarray refuses to encode a variable that also carries _FillValue in attrs.
+    """
+    if "source_elevation" in ds_out:
+        ds_out["source_elevation"].attrs.pop("_FillValue", None)
+        ds_out["source_elevation"].encoding["_FillValue"] = 0
+
+    tmpdir = tempfile.mkdtemp()
+    zarr_dir = Path(tmpdir) / "fused.zarr"
+    ds_out.to_zarr(zarr_dir, mode="w", consolidated=True, zarr_format=2)
+    shutil.make_archive(str(Path(tmpdir) / "fused.zarr"), "zip", str(zarr_dir))
+
+    return FileResponse(
+        path=Path(tmpdir) / "fused.zarr.zip",
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=fused.zarr.zip"},
+        background=BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True),
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Load .env (Resolve from topobathysim root)
@@ -405,28 +429,7 @@ def fuse(
             keep_vars.append("source_elevation")
         ds_out = ds_out[keep_vars]
         ds_out.attrs = _build_zarr_attrs(ds, bbox_tuple, resolution, policy_path.name)
-
-        # Force fill_value for all arrays to satisfy Zarr.jl
-        encoding = {}
-        for var_name in ds_out.data_vars:
-            encoding[var_name] = {"_FillValue": 0}
-            if var_name == "source_elevation":
-                ds_out[var_name].attrs["_FillValue"] = 0
-                ds_out[var_name].encoding["_FillValue"] = 0
-
-        tmpdir = tempfile.mkdtemp()
-        zarr_dir = Path(tmpdir) / "fused.zarr"
-        ds_out.to_zarr(zarr_dir, mode="w", consolidated=True, zarr_format=2)
-        shutil.make_archive(str(Path(tmpdir) / "fused.zarr"), "zip", str(zarr_dir))
-        zarr_zip_path = Path(tmpdir) / "fused.zarr.zip"
-
-        headers = {"Content-Disposition": "attachment; filename=fused.zarr.zip"}
-        return FileResponse(
-            path=zarr_zip_path,
-            media_type="application/zip",
-            headers=headers,
-            background=BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True),
-        )
+        return _zarr_zip_response(ds_out)
 
     buf = BytesIO()
     ds["elevation"].rio.to_raster(buf, driver="GTiff")
@@ -490,29 +493,7 @@ def fuse_post(
             p_name = "custom_override"
 
         ds_out.attrs = _build_zarr_attrs(ds, request.bbox, request.resolution, p_name)
-
-        # Force fill_value for all arrays to satisfy Zarr.jl
-        for var_name in ds_out.data_vars:
-            if var_name == "source_elevation":
-                # Do not set in attrs as xarray 2024.x raises ValueError if set in both attrs and encoding
-                # or if it's already an encoding descriptor.
-                if "_FillValue" in ds_out[var_name].attrs:
-                    del ds_out[var_name].attrs["_FillValue"]
-                ds_out[var_name].encoding["_FillValue"] = 0
-
-        tmpdir = tempfile.mkdtemp()
-        zarr_dir = Path(tmpdir) / "fused.zarr"
-        ds_out.to_zarr(zarr_dir, mode="w", consolidated=True, zarr_format=2)
-        shutil.make_archive(str(Path(tmpdir) / "fused.zarr"), "zip", str(zarr_dir))
-        zarr_zip_path = Path(tmpdir) / "fused.zarr.zip"
-
-        headers = {"Content-Disposition": "attachment; filename=fused.zarr.zip"}
-        return FileResponse(
-            path=zarr_zip_path,
-            media_type="application/zip",
-            headers=headers,
-            background=BackgroundTask(shutil.rmtree, tmpdir, ignore_errors=True),
-        )
+        return _zarr_zip_response(ds_out)
 
     buf = BytesIO()
     ds["elevation"].rio.to_raster(buf, driver="GTiff")
