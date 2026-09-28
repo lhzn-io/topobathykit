@@ -14,7 +14,7 @@
 
 ## 🛠️ Tech Stack & Conventions
 
-- **Language**: Python 3.10+ (Strict type hinting required).
+- **Language**: Python 3.12+ (Strict type hinting required).
 - **Core Libs**: `xarray`/`rioxarray` (raster manip), `numpy` (math), `pdal` (point clouds), `bmi-topography` (standard fetching).
 - **Environment**: **Micromamba** is preferred due to complex binary deps (`gdal`, `pdal`).
   - *Warning*: `bmi-topography` version is pinned (~0.9.0); handle upgrades with caution.
