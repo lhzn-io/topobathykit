@@ -187,6 +187,18 @@ def _run_cell(
         k: {"name": f"{v} (Base Terrain)", "provider": v} for k, v in base_legend.items()
     }
 
+    # Per-step outcome record. hydrate() reads it to refuse caching a cell in
+    # which any step failed, so a transient error is retried on the next run
+    # instead of being locked into the cache. `pixels` counts the halo-canvas
+    # pixels the step supplied valid data for.
+    step_outcomes: list[dict[str, Any]] = []
+
+    def _record(provider: str, status: str, pixels: int = 0, error: str | None = None) -> None:
+        outcome: dict[str, Any] = {"provider": provider, "status": status, "pixels": int(pixels)}
+        if error:
+            outcome["error"] = error[:500]
+        step_outcomes.append(outcome)
+
     # 5. Execution Loop
     for variable in policy.variables:
         if variable.name != "elevation":
@@ -211,14 +223,27 @@ def _run_cell(
                 )
             except ProviderNoDataError as e:
                 logger.info(f"{step.provider}: NoData - {e}")
+                _record(step.provider, "nodata")
+                continue
+            except MemoryError as e:
+                # Logged apart from other failures: under the hydration RLIMIT_AS
+                # ceiling this is the most likely cause of a dropped step.
+                logger.error(f"{step.provider}: MemoryError during fetch - {e}", exc_info=True)
+                _record(step.provider, "error", error=f"MemoryError: {e}")
                 continue
             except Exception as e:
                 logger.error(f"{step.provider}: Failed to fetch - {e}", exc_info=True)
+                _record(step.provider, "error", error=f"{type(e).__name__}: {e}")
                 continue
 
             if fetched_data is None:
                 logger.info(f"[PROBE-RUNTIME] Provider {step.provider} returned None.")
+                _record(step.provider, "nodata")
                 continue
+
+            # A provider that dropped tiles or projects to errors still returns
+            # what it has, flagged with a count of the errors.
+            fetch_errors = int(getattr(fetched_data, "attrs", {}).get("fetch_errors", 0) or 0)
 
             # Load the data into memory IMMEDIATELY so we never trigger
             # complex Dask blockwise warnings when filtering or reprojecting!
@@ -262,6 +287,7 @@ def _run_cell(
                 logger.warning(
                     f"Provider {step.provider} returned unexpected shape {fetched_data.shape}. Skipping."
                 )
+                _record(step.provider, "error", error=f"unexpected shape {fetched_data.shape}")
                 continue
             # ------------------------------
 
@@ -282,6 +308,7 @@ def _run_cell(
             except Exception as e:
                 logger.error(f"Reprojection/Index Alignment failed for {step.provider}: {e}")
                 # Try dropping duplicates forcefully again? Or continue
+                _record(step.provider, "error", error=f"alignment: {type(e).__name__}: {e}")
                 continue
 
             new_data_mask = aligned_data.notnull().compute()
@@ -306,8 +333,13 @@ def _run_cell(
             # reprojection, so we can fall back to provider-level IDs for attribution.
             provider_valid_mask = new_data_mask
 
-            if not provider_valid_mask.any():
+            step_status = "partial" if fetch_errors else "ok"
+            step_error = f"{fetch_errors} tile/project fetch error(s)" if fetch_errors else None
+            valid_pixels = int(provider_valid_mask.sum())
+            if not valid_pixels:
+                _record(step.provider, "partial" if fetch_errors else "nodata", error=step_error)
                 continue
+            _record(step.provider, step_status, pixels=valid_pixels, error=step_error)
 
             # 4. Generate Provider Legend & IDs
             legend = generate_provider_legend(policy)
@@ -409,8 +441,62 @@ def _run_cell(
 
     logger.debug(f"_run_cell returning provenance: {cell_provenance_dict}")
     ds.attrs["provenance_dict"] = cell_provenance_dict
+    # Serialised as JSON because zarr and netCDF attributes cannot hold a list of dicts.
+    ds.attrs["step_outcomes_json"] = json.dumps(step_outcomes)
 
     return cast(xr.Dataset, ds)
+
+
+# Default ceiling on the NaN fraction of a cell before hydrate refuses to cache it.
+# Complete cells have no NaN when the policy has full coverage; the 2026-05 WLIS
+# incident left 0.07% to 24.5% NaN in cells that dropped a step.
+DEFAULT_MAX_CELL_NAN_FRACTION = 0.01
+
+
+def _max_cell_nan_fraction() -> float:
+    """Return the NaN ceiling for caching, from TOPOBATHY_MAX_CELL_NAN_FRACTION if set."""
+    raw = os.environ.get("TOPOBATHY_MAX_CELL_NAN_FRACTION")
+    if raw is None or raw.strip() == "":
+        return DEFAULT_MAX_CELL_NAN_FRACTION
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(f"Ignoring invalid TOPOBATHY_MAX_CELL_NAN_FRACTION={raw!r}")
+        return DEFAULT_MAX_CELL_NAN_FRACTION
+
+
+def _cell_integrity_problems(ds: xr.Dataset, max_nan_fraction: float | None) -> list[str]:
+    """Return the reasons a freshly computed cell must not be cached (empty when complete).
+
+    A cell is incomplete when any policy step raised a fetch error or returned a
+    partial result, or (unless `max_nan_fraction` is None) when it is all NaN or its
+    NaN fraction exceeds `max_nan_fraction`. Steps that raised `ProviderNoDataError`
+    (no coverage) do not count against the cell.
+    """
+    problems: list[str] = []
+    try:
+        outcomes = json.loads(ds.attrs.get("step_outcomes_json", "[]"))
+    except (TypeError, ValueError):
+        outcomes = []
+    for outcome in outcomes:
+        if outcome.get("status") in ("error", "partial"):
+            detail = f": {outcome['error']}" if outcome.get("error") else ""
+            problems.append(f"step {outcome.get('provider')} {outcome.get('status')}{detail}")
+
+    if "elevation" not in ds:
+        problems.append("no elevation variable")
+        return problems
+    total = int(ds["elevation"].size)
+    valid = int(ds["elevation"].notnull().sum())
+    nan_fraction = 1.0 - (valid / total) if total else 1.0
+    ds.attrs["nan_fraction"] = round(nan_fraction, 6)
+    if max_nan_fraction is None:
+        return problems
+    if valid == 0:
+        problems.append("all-NaN elevation")
+    elif nan_fraction > max_nan_fraction:
+        problems.append(f"NaN fraction {nan_fraction:.4f} exceeds {max_nan_fraction:.4f}")
+    return problems
 
 
 def _resolve_policy(policy_input: str | Path) -> Any:
@@ -532,6 +618,7 @@ def hydrate(
     max_workers: int | None = 2,
     on_progress: Any | None = None,
     target_zoom: int | None = None,
+    max_nan_fraction: float | None = None,
 ) -> dict[str, int]:
     """
     Hydrate the cache for a given bbox and resolution by processing all covering grid cells.
@@ -542,11 +629,15 @@ def hydrate(
                      Used by the service to write progress to a state file.
         target_zoom: If set, the hydration was requested at a specific slippy-map zoom level
                      rather than an explicit resolution in meters.
+        max_nan_fraction: Cells whose NaN fraction exceeds this are counted as failed and
+                     not cached. Defaults to TOPOBATHY_MAX_CELL_NAN_FRACTION, else 0.01.
+                     Pass 1.0 to accept any cell that is not entirely NaN.
     """
 
     policy = _resolve_policy(policy_input)
     target_crs = policy.crs
     res = resolution if resolution else 30.0
+    nan_ceiling = _max_cell_nan_fraction() if max_nan_fraction is None else max_nan_fraction
 
     # Determine Grid Cells
     cells, grid_cell_size = _get_grid_cells(bbox, target_crs)
@@ -609,15 +700,15 @@ def hydrate(
                 halo_pct=0.10,
             )
 
-            # Refuse to cache a cell where every elevation pixel is NaN.
-            # This happens when a provider's network fetch fails mid-read (e.g. presigned
-            # URL expiry causing 403s).  An all-NaN zarr would be treated as a valid cache
-            # hit on the next hydrate run, permanently locking in the hole.
-            elev_valid = int(ds_cell["elevation"].notnull().sum()) if "elevation" in ds_cell else 0
-            if elev_valid == 0:
+            # Refuse to cache an incomplete cell. A cached zarr is treated as a valid
+            # hit on every later hydrate run, so caching a cell in which a step failed
+            # (network timeout, VDatum outage, MemoryError) or that is mostly NaN would
+            # permanently lock in the hole. Leaving it uncached retries it next time.
+            problems = _cell_integrity_problems(ds_cell, nan_ceiling)
+            if problems:
                 logger.warning(
-                    f"Cell {cell_bbox} returned all-NaN elevation — skipping cache write "
-                    f"so it will be retried on next hydrate."
+                    f"Cell {cell_bbox} is incomplete; skipping cache write so it will be "
+                    f"retried on next hydrate: {'; '.join(problems)}"
                 )
                 return "failed"
 
@@ -898,8 +989,17 @@ def run(
                 # Keep it as is or JSON dump it
                 ds_cell.attrs["provenance_dict_json"] = json.dumps(ds_cell.attrs["provenance_dict"])
 
+            # Serve a cell with a failed step, but do not cache it (see hydrate). The NaN
+            # ceiling is not applied here: tile requests routinely cover areas outside
+            # every provider, and refusing to cache those would recompute them per request.
+            problems = _cell_integrity_problems(ds_cell, None) if use_cache else []
+            if problems:
+                logger.warning(
+                    f"Cell {cell_bbox} is incomplete; returning it without caching: {'; '.join(problems)}"
+                )
+
             # Attempt to save to cache
-            if use_cache:
+            if use_cache and not problems:
                 try:
                     logger.info(f"Writing Fused Grid Cell Zarr to {cache_path}")
                     ds_chunked = ds_cell.chunk({"y": 2048, "x": 2048})

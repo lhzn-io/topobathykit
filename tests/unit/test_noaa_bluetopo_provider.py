@@ -184,3 +184,104 @@ def test_fetch_layer_single_projected_tile_reprojects_to_requested_crs(tmp_path:
     assert result.rio.crs.to_string() == "EPSG:4326"
     assert np.isfinite(result["elevation"].values).any()
     assert np.nanmax(result["source_id"].values) > 0
+
+
+# ---------------------------------------------------------------------------
+# Fetch-error signalling (transient failures must not look like "no data")
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_layer_all_tiles_failing_raises_fetch_error(tmp_path: Path) -> None:
+    import pytest
+
+    from topobathysim.providers.base import ProviderFetchError
+
+    provider = _new_provider(tmp_path)
+
+    with (
+        patch.object(provider, "resolve_tiles_in_bbox", return_value=["TILE_A", "TILE_B"]),
+        patch.object(provider, "load_tile_as_da", side_effect=ProviderFetchError("VDatum read timeout")),
+        pytest.raises(ProviderFetchError, match="2 error"),
+    ):
+        provider.fetch_layer(bbox=(-72.1, 40.9, -71.8, 41.2), crs="EPSG:4326")
+
+
+def test_fetch_layer_reports_partial_result(tmp_path: Path) -> None:
+    from topobathysim.providers.base import ProviderFetchError
+
+    provider = _new_provider(tmp_path)
+    ds_ok = _make_tile_dataset(-72.0, -71.9, 41.0, 41.1, "EPSG:4326", value=-4.0, src_id=1)
+
+    def _load(tile_id: str, _bbox: tuple[float, float, float, float]) -> xr.Dataset:
+        if tile_id == "TILE_BAD":
+            raise ProviderFetchError("VDatum read timeout")
+        return ds_ok
+
+    with (
+        patch.object(provider, "resolve_tiles_in_bbox", return_value=["TILE_OK", "TILE_BAD"]),
+        patch.object(provider, "load_tile_as_da", side_effect=_load),
+        patch.object(provider, "_resolve_from_sidecar_rat", return_value=None),
+        patch.object(provider, "get_source_survey_id", return_value="H_TEST"),
+    ):
+        result = provider.fetch_layer(bbox=(-72.1, 40.9, -71.8, 41.2), crs="EPSG:4326")
+
+    assert result.attrs["fetch_errors"] == 1
+    assert np.isfinite(result["elevation"].values).any()
+
+
+def _three_band_tile() -> xr.DataArray:
+    """A small BlueTopo-like GeoTIFF read: band 1 elevation, band 2 uncertainty, band 3 contributor."""
+    x = np.linspace(-72.0, -71.99, 8)
+    y = np.linspace(41.01, 41.0, 8)
+    data = np.stack([np.full((8, 8), -5.0), np.ones((8, 8)), np.ones((8, 8))]).astype(np.float32)
+    da = xr.DataArray(data, coords={"band": [1, 2, 3], "y": y, "x": x}, dims=("band", "y", "x"))
+    da.rio.write_crs("EPSG:4326", inplace=True)
+    return da
+
+
+def test_load_tile_vdatum_outage_raises_fetch_error(tmp_path: Path) -> None:
+    """A VDatum timeout must raise, not return an empty Dataset.
+
+    The empty Dataset used to surface in fetch_layer as the unrelated error
+    "No variable named 'elevation'" and drop the whole BlueTopo step.
+    """
+    import pytest
+    import rioxarray
+
+    from topobathysim.providers.base import ProviderFetchError
+    from topobathysim.vdatum import VDatumUnavailableError
+
+    provider = _new_provider(tmp_path)
+
+    with (
+        patch.object(provider, "_resolve_tile_url", return_value="https://example.invalid/tile.tif"),
+        patch.object(rioxarray, "open_rasterio", return_value=_three_band_tile()),
+        patch.object(
+            provider.vdatum,
+            "get_robust_mllw_to_navd88_offset",
+            side_effect=VDatumUnavailableError("read timeout"),
+        ),
+        pytest.raises(ProviderFetchError, match="VDatum"),
+    ):
+        provider.load_tile_as_da("TILE_T", (-72.0, 41.0, -71.99, 41.01))
+
+    assert not (provider.cache_dir / "zarr" / "TILE_T_navd88.zarr").exists()
+
+
+def test_load_tile_without_vdatum_coverage_drops_tile(tmp_path: Path) -> None:
+    import rioxarray
+
+    from topobathysim.vdatum import VDatumNoDataError
+
+    provider = _new_provider(tmp_path)
+
+    with (
+        patch.object(provider, "_resolve_tile_url", return_value="https://example.invalid/tile.tif"),
+        patch.object(rioxarray, "open_rasterio", return_value=_three_band_tile()),
+        patch.object(
+            provider.vdatum,
+            "get_robust_mllw_to_navd88_offset",
+            side_effect=VDatumNoDataError("outside model"),
+        ),
+    ):
+        assert provider.load_tile_as_da("TILE_T", (-72.0, 41.0, -71.99, 41.01)) is None

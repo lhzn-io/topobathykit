@@ -11,13 +11,14 @@ import geopandas as gpd
 import requests  # type: ignore
 import rioxarray
 import xarray as xr
+from rioxarray.exceptions import NoDataInBounds, OneDimensionalRaster
 from rioxarray.merge import merge_arrays
 from shapely.geometry import box
 
 from ..config import get_cache_root
 from ..runtime import should_consolidate
-from ..vdatum import VDatumResolver
-from .base import Provider, ProviderNoDataError, sanitize_elevation_nodata
+from ..vdatum import VDatumNoDataError, VDatumResolver
+from .base import Provider, ProviderFetchError, ProviderNoDataError, sanitize_elevation_nodata
 from .registry import registry
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,9 @@ class NoaaTopobathyProvider(Provider):
 
         project_layers = []
         provenance_dict: dict[int, dict[str, str]] = {}
+        # Tiles or projects lost to errors (as opposed to no coverage). The runtime
+        # refuses to cache a cell when this is non-zero, so the loss is retried.
+        fetch_errors: list[str] = []
 
         # 2. Process Each Project
         for pid in pids:
@@ -199,7 +203,7 @@ class NoaaTopobathyProvider(Provider):
                 for t in tiles:
                     try:
                         # Optimization: Pass bbox to fetch_tile to enable "Clip-then-Cache"
-                        da_fetched = self.fetch_tile(t, bbox=bbox, project_id=pid)
+                        da_fetched = self.fetch_tile(t, bbox=bbox, project_id=pid, raise_errors=True)
                         if da_fetched is None:
                             continue
 
@@ -216,7 +220,7 @@ class NoaaTopobathyProvider(Provider):
                                 crs="EPSG:4326",
                                 allow_one_dimensional_raster=True,
                             )
-                        except Exception:
+                        except (NoDataInBounds, OneDimensionalRaster):
                             # Empty after clip
                             continue
 
@@ -232,11 +236,13 @@ class NoaaTopobathyProvider(Provider):
                                 da = da.rio.reproject(crs, **reproj_knn)
                             except Exception as e:
                                 logger.warning(f"Reprojection failed for tile {t}: {e}")
+                                fetch_errors.append(f"{pid}/{t}: reproject {type(e).__name__}: {e}")
                                 continue
 
                         project_das.append(da)
                     except Exception as e:
-                        logger.warning(f"Failed to fetch tile {t}: {e}")
+                        logger.warning(f"Failed to fetch tile {t}: {type(e).__name__}: {e}")
+                        fetch_errors.append(f"{pid}/{t}: {type(e).__name__}: {e}")
 
                 if project_das:
                     # Merge tiles for this project
@@ -293,13 +299,27 @@ class NoaaTopobathyProvider(Provider):
 
                         project_layers.append(p_ds)
                     except Exception as e:
-                        logger.warning(f"Failed to merge tiles for project {pid}: {e}")
+                        logger.warning(f"Failed to merge tiles for project {pid}: {type(e).__name__}: {e}")
+                        fetch_errors.append(f"{pid}: merge {type(e).__name__}: {e}")
 
             except Exception as e:
-                logger.warning(f"Failed to process project {pid}: {e}")
+                logger.warning(f"Failed to process project {pid}: {type(e).__name__}: {e}")
+                fetch_errors.append(f"{pid}: {type(e).__name__}: {e}")
 
         if not project_layers:
+            if fetch_errors:
+                # Coverage exists but every contributing tile or project failed; this
+                # is not a genuine no-data result and must not be cached as one.
+                raise ProviderFetchError(
+                    f"NOAA Topobathy fetch failed for bbox {bbox} with {len(fetch_errors)} error(s); "
+                    f"first: {fetch_errors[0]}"
+                )
             raise ProviderNoDataError(f"No valid data returned from {len(pids)} projects for bbox {bbox}")
+        if fetch_errors:
+            logger.warning(
+                f"NOAA Topobathy returned partial data for bbox {bbox}: {len(fetch_errors)} error(s); "
+                f"first: {fetch_errors[0]}"
+            )
 
         # 3. Merge Projects
         # project_layers is ordered [Best, ..., Worst]
@@ -339,6 +359,7 @@ class NoaaTopobathyProvider(Provider):
         final_ds["source_id"].rio.write_crs(target_crs, inplace=True)
 
         final_ds.attrs["provenance_dict"] = provenance_dict
+        final_ds.attrs["fetch_errors"] = len(fetch_errors)
         logger.debug(f"NOAA Topobathy Return -> CRS: {final_ds.rio.crs}")
         return cast(xr.Dataset, final_ds)
 
@@ -1241,6 +1262,7 @@ class NoaaTopobathyProvider(Provider):
         tile_filename: str,
         bbox: tuple[float, float, float, float] | None = None,
         project_id: str | None = None,
+        raise_errors: bool = False,
     ) -> xr.DataArray | None:
         """
         Fetches the specific COG, applies VDatum corrections, and caches as Zarr.
@@ -1251,6 +1273,11 @@ class NoaaTopobathyProvider(Provider):
         2. If miss, stream lazy COG -> Clip to BBox -> Download only that subset -> Cache Zarr.
 
         This avoids downloading 2GB+ files for a small request.
+
+        Returns None when the tile has no data for the request (404, empty clip, no
+        VDatum coverage). With ``raise_errors=True``, failures that a retry may fix
+        (network, VDatum outage, MemoryError) raise `ProviderFetchError` instead of
+        also returning None, so `fetch_layer` can tell them apart from no coverage.
         """
         # Use caller-supplied project_id so concurrent threads on the singleton don't
         # clobber each other's _active_project_id state mid-fetch.
@@ -1469,11 +1496,21 @@ class NoaaTopobathyProvider(Provider):
                                 da_raw.attrs["vertical_datum"] = "NAVD88"
                                 da_raw.attrs["correction_method"] = "VDatum Geoid18"
                                 da_raw.attrs["vdatum_offset"] = offset
+                        except VDatumNoDataError as e:
+                            logger.warning(
+                                f"VDatum has no coverage for {local_filename}: {e}. "
+                                "Dropping dataset to prevent artificial cliffs."
+                            )
+                            return None
                         except Exception as e:
                             logger.warning(
                                 f"VDatum correction failed: {e}. "
                                 "Dropping dataset to prevent artificial cliffs."
                             )
+                            if raise_errors:
+                                raise ProviderFetchError(
+                                    f"VDatum correction failed for {local_filename}: {type(e).__name__}: {e}"
+                                ) from e
                             return None
 
                     # 5. Write to Zarr
@@ -1493,6 +1530,8 @@ class NoaaTopobathyProvider(Provider):
                 # Return re-opened Zarr
                 return xr.open_dataarray(zarr_path, engine="zarr", chunks="auto", decode_coords="all")
 
+        except ProviderFetchError:
+            raise
         except Exception as e:
             if "404" in str(e):
                 logger.warning(
@@ -1502,7 +1541,11 @@ class NoaaTopobathyProvider(Provider):
                 with open(missing_marker_path, "w") as f:
                     f.write("404 Not Found")
             else:
-                logger.error(f"Zarr lock/process failed: {e}")
+                logger.error(f"Zarr lock/process failed: {type(e).__name__}: {e}")
+                if raise_errors:
+                    raise ProviderFetchError(
+                        f"Topobathy tile {local_filename} failed: {type(e).__name__}: {e}"
+                    ) from e
             return None
         # Note: lock file (.lock) is intentionally NOT deleted here. Deleting it creates a
         # TOCTOU race: a thread blocked on FileLock wakes up holding the old inode while a
