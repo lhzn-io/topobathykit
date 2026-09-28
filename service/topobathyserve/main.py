@@ -28,7 +28,7 @@ import xarray as xr
 import yaml
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
 
 from topobathysim.config import get_cache_root
@@ -287,6 +287,11 @@ if static_dir.exists():
     from fastapi.staticfiles import StaticFiles
 
     app.mount("/viewer", StaticFiles(directory=str(static_dir), html=True), name="static")
+
+
+@app.get("/", include_in_schema=False)
+async def viewer_root() -> RedirectResponse:
+    return RedirectResponse("/viewer/")
 
 
 @app.get("/health")
