@@ -38,3 +38,10 @@ jobs:
       - name: Unit tests
         shell: bash -el {0}
         run: python -m pytest tests/unit -m "not integration" --durations=10
+
+      # The FastAPI service suite mocks run(), so it needs no network or cache and
+      # finishes in a few seconds. It covers the /fuse zarr export and the DEM
+      # viewer cache, which the library unit tests do not reach.
+      - name: Service tests
+        shell: bash -el {0}
+        run: python -m pytest service/tests -m "not integration" --durations=10
