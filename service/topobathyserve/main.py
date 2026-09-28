@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # Set Matplotlib Backend to Agg (Non-Interactive) for Server Use
 import matplotlib
@@ -226,7 +226,7 @@ def _build_zarr_attrs(
         "vertical_datum": ds.attrs.get("vertical_datum", "Unknown"),
         "policy": policy_name,
         "providers_used": sorted(set(providers_used)),
-        "created": datetime.now(timezone.utc).isoformat(),
+        "created": datetime.now(UTC).isoformat(),
         "provenance_dict": _json_safe(provenance) if provenance else {},
     }
 
@@ -1091,7 +1091,7 @@ def get_tile_metadata(
     for path_to_check in [npy_path, png_path]:
         if path_to_check.exists() and path_to_check.stat().st_size > 0:
             mtime = path_to_check.stat().st_mtime
-            dt = datetime.datetime.fromtimestamp(mtime, tz=datetime.timezone.utc)
+            dt = datetime.datetime.fromtimestamp(mtime, tz=datetime.UTC)
             created_at = dt.strftime("%Y%m%d-%H:%M:%S UTC")
             cache_status = "hit"
 
@@ -1710,7 +1710,7 @@ async def trigger_hydrate(
     # Prune old job files
     job_state.list_jobs(max_age_hours=24)
 
-    start_time = datetime.now(timezone.utc)
+    start_time = datetime.now(UTC)
     job_id = str(uuid.uuid4())
 
     # Handle custom policy or default to loaded policy

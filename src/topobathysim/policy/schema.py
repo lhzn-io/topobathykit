@@ -1,4 +1,4 @@
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -22,7 +22,7 @@ class ZoneRule(BaseModel):
     priority: int = 0
 
 
-class OperatorType(str, Enum):
+class OperatorType(StrEnum):
     """
     Types of spatial fusion operators available.
     """

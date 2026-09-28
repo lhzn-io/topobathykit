@@ -15,7 +15,7 @@ Design constraints:
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +87,7 @@ def _reconcile_dead_worker(job_id: str, state: dict[str, Any]) -> dict[str, Any]
         f"Hydration worker process {pid} {reason} without recording completion "
         "(likely killed by the OOM killer or a container restart)"
     )
-    current["finished_at"] = datetime.now(timezone.utc).isoformat()
+    current["finished_at"] = datetime.now(UTC).isoformat()
     # Update the file so subsequent reads don't re-check
     write_state(job_id, current)
     return current
@@ -96,7 +96,7 @@ def _reconcile_dead_worker(job_id: str, state: dict[str, Any]) -> dict[str, Any]
 def list_jobs(max_age_hours: float = 24) -> list[dict[str, Any]]:
     """List recent jobs, pruning expired ones."""
     _ensure_jobs_dir()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     jobs = []
     for f in _ensure_jobs_dir().glob("*.json"):
         try:
@@ -109,7 +109,7 @@ def list_jobs(max_age_hours: float = 24) -> list[dict[str, Any]]:
         try:
             submitted_dt = datetime.fromisoformat(submitted)
             if submitted_dt.tzinfo is None:
-                submitted_dt = submitted_dt.replace(tzinfo=timezone.utc)
+                submitted_dt = submitted_dt.replace(tzinfo=UTC)
             age_hours = (now - submitted_dt).total_seconds() / 3600
             if age_hours > max_age_hours and state.get("status") in ("completed", "failed"):
                 f.unlink(missing_ok=True)

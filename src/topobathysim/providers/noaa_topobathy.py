@@ -1461,7 +1461,7 @@ class NoaaTopobathyProvider(Provider):
                     da_raw.attrs["source_url"] = http_url
 
                     # Time
-                    da_raw.attrs["date_created"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    da_raw.attrs["date_created"] = datetime.datetime.now(datetime.UTC).isoformat()
                     da_raw.attrs["start_date"] = meta.get("start_date", "Unknown")
                     da_raw.attrs["end_date"] = meta.get("end_date", "Unknown")
 

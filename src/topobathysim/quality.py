@@ -1,11 +1,11 @@
-from enum import Enum
+from enum import StrEnum
 from typing import Any, ClassVar
 
 import numpy as np
 import xarray as xr
 
 
-class QualityClass(str, Enum):
+class QualityClass(StrEnum):
     DIRECT = "Direct Measurement"
     INDIRECT = "Indirect/Predicted"
     UNKNOWN = "Unknown/Interpolated"
