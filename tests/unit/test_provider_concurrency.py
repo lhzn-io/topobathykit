@@ -156,6 +156,94 @@ def test_concurrent_fetch_tile_calls_use_correct_project_ids(
     assert "project_id" in sig.parameters, "fetch_tile must have project_id parameter"
 
 
+def test_concurrent_fetch_layer_resolves_tiles_from_own_project_index(
+    topobathy_provider: Any,
+) -> None:
+    """Two threads fetching different projects must each resolve tiles from their own index.
+
+    fetch_layer used to call set_active_project(pid) and then resolve_tiles_in_bbox(),
+    which read the shared _active_project_id. The barrier inside resolve_tiles_in_bbox
+    holds both threads between those two calls, so with the old code both resolve
+    against whichever project was set last.
+    """
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+
+    provider = topobathy_provider
+    provider._projects["20000"] = "Other_Project_20000"
+    NoaaTopobathyProvider._cls_tile_indices["10274"] = gpd.GeoDataFrame(
+        [{"Name": "tile_from_10274.tif", "geometry": box(-74, 40, -73, 41)}], crs="EPSG:4326"
+    )
+    NoaaTopobathyProvider._cls_tile_indices["20000"] = gpd.GeoDataFrame(
+        [{"Name": "tile_from_20000.tif", "geometry": box(-74, 40, -73, 41)}], crs="EPSG:4326"
+    )
+
+    barrier = threading.Barrier(2, timeout=10)
+    original_resolve = provider.resolve_tiles_in_bbox
+
+    def synchronised_resolve(*args: Any, **kwargs: Any) -> list[str]:
+        barrier.wait()
+        return list(original_resolve(*args, **kwargs))
+
+    calls: list[tuple[str, str]] = []
+    calls_lock = threading.Lock()
+
+    def spy_fetch_tile(tile_filename: str, **kwargs: Any) -> None:
+        with calls_lock:
+            calls.append((str(kwargs.get("project_id")), tile_filename))
+        return None
+
+    def projects_for(*_args: Any, filter_criteria: Any = None, **_kw: Any) -> list[str]:
+        return [filter_criteria["project_id"]]
+
+    def run_fetch(pid: str) -> None:
+        import contextlib
+
+        from topobathysim.providers.base import ProviderNoDataError
+
+        with contextlib.suppress(ProviderNoDataError):  # the spy returns no data
+            provider.fetch_layer(bbox=(-73.6, 40.6, -73.5, 40.7), filter={"project_id": pid})
+
+    with (
+        patch.object(provider, "resolve_tiles_in_bbox", side_effect=synchronised_resolve),
+        patch.object(provider, "fetch_tile", side_effect=spy_fetch_tile),
+        patch.object(provider, "find_projects_by_box", side_effect=projects_for),
+        patch.object(provider, "fs", MagicMock(ls=MagicMock(return_value=[]))),  # never list S3
+        ThreadPoolExecutor(max_workers=2) as pool,
+    ):
+        futs = [pool.submit(run_fetch, "10274"), pool.submit(run_fetch, "20000")]
+        for f in futs:
+            f.result()
+
+    assert sorted(calls) == [
+        ("10274", "tile_from_10274.tif"),
+        ("20000", "tile_from_20000.tif"),
+    ], f"each project must fetch only the tiles from its own index, got: {calls}"
+
+
+def test_set_active_project_unknown_id_clears_stale_project(topobathy_provider: Any) -> None:
+    """An unknown project ID must not leave the previously active project in place."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+
+    provider = topobathy_provider
+    provider.fs = MagicMock(ls=MagicMock(return_value=[]))  # never list S3
+    NoaaTopobathyProvider._cls_tile_indices["10274"] = gpd.GeoDataFrame(
+        [{"Name": "tile_001.tif", "geometry": box(-74, 40, -73, 41)}], crs="EPSG:4326"
+    )
+    provider.set_active_project("10274")
+    assert provider.resolve_tiles_in_bbox(-73.6, 40.6, -73.5, 40.7) == ["tile_001.tif"]
+
+    provider.set_active_project("NOT_A_PROJECT")
+
+    assert provider._active_project_id is None
+    assert provider.resolve_tiles_in_bbox(-73.6, 40.6, -73.5, 40.7) == []
+
+
 # ---------------------------------------------------------------------------
 # noaa_bluetopo — _ensure_scheme_loaded double-load
 # ---------------------------------------------------------------------------

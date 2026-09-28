@@ -65,6 +65,8 @@ class NoaaTopobathyProvider(Provider):
     _cls_spatial_index: ClassVar["gpd.GeoDataFrame | None"] = None
     _cls_tile_indices: ClassVar[dict[str, "gpd.GeoDataFrame"]] = {}
     _cls_lock: ClassVar[threading.Lock] = threading.Lock()
+    # Serialises tile index loads so concurrent cells load each project's index once.
+    _cls_index_lock: ClassVar[threading.Lock] = threading.Lock()
     _initialized: bool
 
     def __new__(cls, *args: Any, **kwargs: Any) -> "NoaaTopobathyProvider":
@@ -180,12 +182,15 @@ class NoaaTopobathyProvider(Provider):
                 # OPTIMIZATION: Check if all expected tiles for this project are already in Zarr cache.
                 # If they are, we can skip the S3 directory listing in set_active_project().
                 # However, since tiles are dynamic per bbox, we still need the tile index.
-                # BUT, we can cache the tile index in memory (done in set_active_project).
+                # BUT, we can cache the tile index in memory (done in _load_tile_index).
 
-                self.set_active_project(pid)
+                # Load and query this project's index by explicit pid. The shared
+                # _active_project_id is not used here: concurrent cells on the
+                # singleton would otherwise resolve tiles against each other's project.
+                self._load_tile_index(pid)
 
                 # Resolve Tiles
-                tiles = self.resolve_tiles_in_bbox(west, south, east, north)
+                tiles = self.resolve_tiles_in_bbox(west, south, east, north, project_id=pid)
                 if not tiles:
                     continue
 
@@ -1035,15 +1040,49 @@ class NoaaTopobathyProvider(Provider):
     def set_active_project(self, project_id: str) -> None:
         """
         Sets the active project and loads its tile index.
+
+        The active project is shared state on the process-wide singleton, so it is
+        only a convenience for single-threaded callers. Concurrent code must pass
+        the project ID explicitly to `resolve_tiles_in_bbox` and `fetch_tile`.
         """
         self._ensure_project_list()
         if project_id not in self._projects:
             logger.error(f"Project ID {project_id} not found in index.")
+            # Clear rather than keep the previous project active, so a later
+            # resolve_tiles_in_bbox() cannot silently use another project's index.
+            self._active_project_id = None
             return
 
-        if self._active_project_id == project_id and self._tile_index is not None:
-            return
+        self._active_project_id = project_id
+        self._load_tile_index(project_id)
 
+    def _load_tile_index(self, project_id: str) -> "gpd.GeoDataFrame | None":
+        """Return the tile index for `project_id`, loading it into the class cache if needed.
+
+        Reads and writes `_cls_tile_indices[project_id]` directly and never touches
+        `_active_project_id`, so it is safe to call from concurrent threads.
+        """
+        cached = NoaaTopobathyProvider._cls_tile_indices.get(project_id)
+        if cached is not None:
+            return cached
+
+        self._ensure_project_list()
+        if project_id not in self._projects:
+            logger.error(f"Project ID {project_id} not found in index.")
+            return None
+
+        with NoaaTopobathyProvider._cls_index_lock:
+            # Re-check after acquiring the lock (another thread may have loaded it)
+            cached = NoaaTopobathyProvider._cls_tile_indices.get(project_id)
+            if cached is not None:
+                return cached
+            index = self._read_tile_index(project_id)
+            if index is not None:
+                NoaaTopobathyProvider._cls_tile_indices[project_id] = index
+            return index
+
+    def _read_tile_index(self, project_id: str) -> "gpd.GeoDataFrame | None":
+        """Read the tile index for `project_id` from the disk cache, or download it from S3."""
         # Use disk-backed caching for the tile index to eliminate S3 directory listings
         # and redundant downloads for the same project across grid cells.
         index_cache_dir = self.metadata_dir / "tile_index"
@@ -1056,18 +1095,11 @@ class NoaaTopobathyProvider(Provider):
             try:
                 # Load the first one found (usually .gpkg or .shp).
                 # Geopandas can read .zip files directly if they contain a shapefile.
-
-                # IMPORTANT: Set active project ID first so the property setter writes to the cache!
-                self._active_project_id = project_id
-                self._tile_index = gpd.read_file(cached_indices[0])
+                index = gpd.read_file(cached_indices[0])
                 logger.debug(f"Topobathy Tile Index Cache Hit (Disk): {project_id}")
-                return
+                return index
             except Exception as e:
                 logger.warning(f"Failed to load cached tile index {cached_indices[0]}: {e}")
-                # Reset if load fails
-                self._active_project_id = None
-
-        self._active_project_id = project_id
 
         # Cache Miss - Identify index file on S3
         # Find tile index in laz/geoid18/{ID}, laz/geoid12b/{ID}, or dem/{FOLDER}/
@@ -1112,7 +1144,7 @@ class NoaaTopobathyProvider(Provider):
 
         if not index_file_key:
             logger.warning(f"No tile index found for Project {project_id} in standard locations.")
-            return
+            return None
 
         # Download Index to persistent metadata cache
         local_index_path = index_cache_dir / f"{project_id}{Path(index_file_key).suffix}"
@@ -1122,33 +1154,47 @@ class NoaaTopobathyProvider(Provider):
                 self.fs.get(index_file_key, str(local_index_path))
             except Exception as e:
                 logger.error(f"Failed to download tile index: {e}")
-                return
+                return None
 
         try:
-            self._tile_index = gpd.read_file(local_index_path)
+            return gpd.read_file(local_index_path)
         except Exception as e:
             logger.error(f"Failed to load tile index {local_index_path}: {e}")
-            self._tile_index = None
+            return None
 
-    def resolve_tiles_in_bbox(self, west: float, south: float, east: float, north: float) -> list[str]:
+    def resolve_tiles_in_bbox(
+        self,
+        west: float,
+        south: float,
+        east: float,
+        north: float,
+        project_id: str | None = None,
+    ) -> list[str]:
         """
         Returns list of tile filenames (or download URLs) for the bbox.
+
+        Pass `project_id` explicitly from concurrent code; it falls back to the
+        active project only for single-threaded callers of `set_active_project`.
         """
-        if self._tile_index is None:
+        pid = project_id if project_id is not None else self._active_project_id
+        if pid is None:
+            return []
+        tile_index = NoaaTopobathyProvider._cls_tile_indices.get(pid)
+        if tile_index is None:
             return []
 
         search_box = box(west, south, east, north)
 
         # Reproject search box to index CRS if different
         query_geom = search_box
-        if self._tile_index.crs and self._tile_index.crs.to_string() != "EPSG:4326":
+        if tile_index.crs and tile_index.crs.to_string() != "EPSG:4326":
             gdf_box = gpd.GeoSeries([search_box], crs="EPSG:4326")
             with contextlib.suppress(Exception):
-                query_geom = gdf_box.to_crs(self._tile_index.crs)[0]
+                query_geom = gdf_box.to_crs(tile_index.crs)[0]
 
         # Drop rows with missing geometries before spatial query
-        valid_mask = self._tile_index.geometry.notnull()
-        valid_index = self._tile_index[valid_mask]
+        valid_mask = tile_index.geometry.notnull()
+        valid_index = tile_index[valid_mask]
         matches = valid_index[valid_index.intersects(query_geom)]
 
         results = []
@@ -1172,8 +1218,8 @@ class NoaaTopobathyProvider(Provider):
                     continue
 
                 # Cleanup internal absolute paths like /san1/raster/.../Project_Folder/block/tile.tif
-                if self._active_project_id:
-                    folder_name = self._projects.get(self._active_project_id)
+                if pid:
+                    folder_name = self._projects.get(pid)
                     if folder_name and folder_name in fname:
                         fname = fname.split(folder_name + "/")[-1]
                     else:
@@ -1477,16 +1523,16 @@ class NoaaTopobathyProvider(Provider):
             project_ids_to_try = self.find_projects_by_box(west, south, east, north)
 
         for pid in project_ids_to_try:
-            self.set_active_project(pid)
+            self._load_tile_index(pid)
 
-            tiles = self.resolve_tiles_in_bbox(west, south, east, north)
+            tiles = self.resolve_tiles_in_bbox(west, south, east, north, project_id=pid)
             if not tiles:
                 continue
 
             bbox = (west, south, east, north)
             das = []
             for t in tiles:
-                da = self.fetch_tile(t, bbox=bbox)
+                da = self.fetch_tile(t, bbox=bbox, project_id=pid)
                 if da is not None:
                     das.append(da)
 

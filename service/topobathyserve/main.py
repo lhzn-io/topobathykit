@@ -2111,12 +2111,18 @@ async def analyze_coverage(
                         ):
                             continue
 
-                        provider.set_active_project(name)  # type: ignore[attr-defined]
-                        tiles = provider.resolve_tiles_in_bbox(w, s, east, n)  # type: ignore[attr-defined]
+                        # Pass the project explicitly: the provider is a process-wide
+                        # singleton shared with concurrent requests.
+                        provider._load_tile_index(name)  # type: ignore[attr-defined]
+                        tiles = provider.resolve_tiles_in_bbox(  # type: ignore[attr-defined]
+                            w, s, east, n, project_id=name
+                        )
                         has_data = False
                         for t in tiles:
                             try:
-                                da = provider.fetch_tile(t, request.bbox)  # type: ignore[attr-defined]
+                                da = provider.fetch_tile(  # type: ignore[attr-defined]
+                                    t, request.bbox, project_id=name
+                                )
                                 if da is not None and int(da.notnull().sum()) > 0:
                                     has_data = True
                                     break
