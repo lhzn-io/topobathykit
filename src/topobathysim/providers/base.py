@@ -111,6 +111,49 @@ def interpolate_small_gaps(da: xr.DataArray, max_gap_m: float, resolution_m: flo
     return cast(xr.DataArray, da.copy(data=filled_vals))
 
 
+def despike_median_deviation(
+    da: xr.DataArray, threshold: float, min_valid: int = 5
+) -> tuple[xr.DataArray, int]:
+    """Mask pixels that depart from their 3x3 neighbourhood median by more than `threshold`.
+
+    Returns the filtered array and the number of pixels masked to NaN.
+
+    The median ignores NaN, so a pixel beside a coverage edge is judged against the data
+    that is actually there. A window with fewer than `min_valid` finite values (the
+    centre included) is left alone rather than judged on too few neighbours.
+
+    Scale matters. The filter sees features about one pixel wide at the resolution it is
+    run at, so it belongs after alignment to the output canvas. The Mount Sinai Harbor
+    defect in New_England_Coned_Topobathy_DEM_2016_6194 is a smooth bowl about 40 m across
+    reaching -290 m in the source COG: invisible to a 3x3 window at the native 1 m, and a
+    one or two pixel spike at 30 m.
+    """
+    if threshold <= 0:
+        return da, 0
+    vals = np.asarray(da.values, dtype=np.float64)
+    if vals.ndim != 2 or vals.size == 0:
+        return da, 0
+
+    import warnings
+
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    padded = np.pad(vals, 1, mode="constant", constant_values=np.nan)
+    windows = sliding_window_view(padded, (3, 3))
+    with warnings.catch_warnings():
+        # All-NaN windows (outside coverage) are expected and handled by the count below.
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        med = np.nanmedian(windows, axis=(-2, -1))
+    count = np.isfinite(windows).sum(axis=(-2, -1))
+
+    spikes = np.isfinite(vals) & (count >= min_valid) & (np.abs(vals - med) > threshold)
+    n = int(spikes.sum())
+    if not n:
+        return da, 0
+    cleaned = np.where(spikes, np.nan, da.values)
+    return cast(xr.DataArray, da.copy(data=cleaned)), n
+
+
 def matches_pattern(name: str, patterns: list[str]) -> bool:
     """Return True if name matches any pattern in the list.
 

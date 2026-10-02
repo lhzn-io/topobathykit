@@ -29,7 +29,7 @@ from topobathysim.policy.loader import (
     load_policy_from_str,
 )
 from topobathysim.policy.schema import OperatorType
-from topobathysim.providers.base import ProviderNoDataError
+from topobathysim.providers.base import ProviderNoDataError, despike_median_deviation
 from topobathysim.providers.registry import registry
 
 from .config import get_cache_root
@@ -193,10 +193,14 @@ def _run_cell(
     # pixels the step supplied valid data for.
     step_outcomes: list[dict[str, Any]] = []
 
-    def _record(provider: str, status: str, pixels: int = 0, error: str | None = None) -> None:
+    def _record(
+        provider: str, status: str, pixels: int = 0, error: str | None = None, despiked: int = 0
+    ) -> None:
         outcome: dict[str, Any] = {"provider": provider, "status": status, "pixels": int(pixels)}
         if error:
             outcome["error"] = error[:500]
+        if despiked:
+            outcome["despiked"] = int(despiked)
         step_outcomes.append(outcome)
 
     # 5. Execution Loop
@@ -311,6 +315,23 @@ def _run_cell(
                 _record(step.provider, "error", error=f"alignment: {type(e).__name__}: {e}")
                 continue
 
+            # --- Despike at canvas resolution ---
+            # Runs after alignment because the filter only sees features about one pixel
+            # wide at the scale it runs at (see despike_median_deviation). Masked pixels
+            # become NaN, so lower-priority steps show through them. ncei_bag already
+            # applies the same thresholds at its native resolution, so it is not filtered
+            # twice.
+            despiked = 0
+            if step.filter and step.provider != "ncei_bag":
+                max_dev = step.filter.max_deviation or step.filter.max_depth_change
+                if max_dev:
+                    aligned_data, despiked = despike_median_deviation(aligned_data, float(max_dev))
+                    if despiked:
+                        logger.info(
+                            f"{step.provider}: despiked {despiked} pixel(s) deviating more than "
+                            f"{float(max_dev)} m from their 3x3 median in cell {cell_bbox}"
+                        )
+
             new_data_mask = aligned_data.notnull().compute()
 
             aligned_source_id = None
@@ -337,9 +358,14 @@ def _run_cell(
             step_error = f"{fetch_errors} tile/project fetch error(s)" if fetch_errors else None
             valid_pixels = int(provider_valid_mask.sum())
             if not valid_pixels:
-                _record(step.provider, "partial" if fetch_errors else "nodata", error=step_error)
+                _record(
+                    step.provider,
+                    "partial" if fetch_errors else "nodata",
+                    error=step_error,
+                    despiked=despiked,
+                )
                 continue
-            _record(step.provider, step_status, pixels=valid_pixels, error=step_error)
+            _record(step.provider, step_status, pixels=valid_pixels, error=step_error, despiked=despiked)
 
             # 4. Generate Provider Legend & IDs
             legend = generate_provider_legend(policy)
