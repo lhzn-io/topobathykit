@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="re
 
 @pytest.fixture(autouse=True)
 def _isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TOPOBATHYSIM_CACHE_DIR", str(tmp_path))
+    monkeypatch.setenv("TOPOBATHYKIT_CACHE_DIR", str(tmp_path))
 
 
 def _running_state(job_id: str, pid: int, **extra: Any) -> dict[str, Any]:

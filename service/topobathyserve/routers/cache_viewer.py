@@ -3,8 +3,8 @@ import os
 
 from fastapi import APIRouter, HTTPException, status
 
-from topobathysim.api import cache_api
-from topobathysim.api.models import (
+from topobathykit.api import cache_api
+from topobathykit.api.models import (
     CacheDetail,
     CacheSummary,
     CacheTierInfo,

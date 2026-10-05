@@ -1,5 +1,5 @@
 """
-Provider registry and implementations for TopoBathySim.
+Provider registry and implementations for topobathykit.
 """
 
 from .base import Provider

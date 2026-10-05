@@ -1,7 +1,7 @@
 Runtime Architecture
 ====================
 
-The TopoBathySim Runtime is a stateless engine that executes Fusion Policies.
+The topobathykit Runtime is a stateless engine that executes Fusion Policies.
 
 Core Concept
 ------------
@@ -44,7 +44,7 @@ Unlike traditional pipelines that hardcode logic (e.g., "Always put Lidar over G
 Components
 ----------
 
-Runtime Engine (``topobathysim.runtime``)
+Runtime Engine (``topobathykit.runtime``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The entry point ``run(policy_path, bbox)`` orchestrates the entire process:
@@ -55,7 +55,7 @@ The entry point ``run(policy_path, bbox)`` orchestrates the entire process:
 4.  **Alignment**: Reprojects the fetched layer to match the Canvas pixel grid (using ``rio.reproject_match``).
 5.  **Composition**: Applies the blening operator (Overwrite/Feather) to merge the aligned layer into the canvas.
 
-Providers (``topobathysim.providers``)
+Providers (``topobathykit.providers``)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Providers are standardized adapters that fetch data from remote sources.
@@ -133,6 +133,6 @@ Caching Strategy
 1.  **Source Cache**: Original files (TIFF, BAG, LAZ) downloaded from agencies (download providers only; streaming providers write directly to zarr).
 2.  **Provider Zarr Cache**: Intermediate rasterised chunks per provider, stored for fast repeated access.
 3.  **Fused Zarr Cache**: Multi-provider composite grids keyed by ``{policy, cell_bbox, resolution, crs}`` hash.
-4.  **Tile Cache**: Final XYZ PNG/NPY/NPZ tiles at ``~/.cache/topobathysim/tiles/``, with ``_meta.json`` and ``_src.npz`` sidecars.
+4.  **Tile Cache**: Final XYZ PNG/NPY/NPZ tiles at ``~/.cache/topobathykit/tiles/``, with ``_meta.json`` and ``_src.npz`` sidecars.
 
 See :doc:`cli_tools` for cache tier management.

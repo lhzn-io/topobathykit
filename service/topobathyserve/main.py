@@ -31,14 +31,15 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, 
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
 
-from topobathysim.config import get_cache_root
-from topobathysim.policy.loader import hash_policy, load_policy, load_policy_from_str
-from topobathysim.quality import calculate_spatial_stats
-from topobathysim.runtime import hydrate, run, should_consolidate
+from topobathykit import config as topobathykit_config
+from topobathykit.config import get_cache_root
+from topobathykit.policy.loader import hash_policy, load_policy, load_policy_from_str
+from topobathykit.quality import calculate_spatial_stats
+from topobathykit.runtime import hydrate, run, should_consolidate
 
 from . import job_state
 
-# from topobathysim.quality import source_report # Removed as not directly supported in runtime yet
+# from topobathykit.quality import source_report # Removed as not directly supported in runtime yet
 from .models import (
     DEMQualityReport,
     ElevationResponse,
@@ -55,17 +56,17 @@ log_dir = Path("logs")
 log_dir.mkdir(exist_ok=True)
 
 # Parse Debug Level from Env (set by run_server.py or environment)
-debug_mode = int(os.environ.get("TOPOBATHYSIM_DEBUG", "0"))
+debug_mode = int(topobathykit_config.env("TOPOBATHYKIT_DEBUG", "0") or 0)
 log_level = logging.DEBUG if debug_mode >= 1 else logging.INFO
 
 # We need to aggressively configure logging because Uvicorn may have already set up handlers
 # and basicConfig does nothing if handlers exist. This runs at import deliberately:
-# run_server.py sets TOPOBATHYSIM_DEBUG before uvicorn imports this module, and each
+# run_server.py sets TOPOBATHYKIT_DEBUG before uvicorn imports this module, and each
 # worker process imports it afresh, so there is no earlier hook to use.
-# Test implication: importing this module pins the "topobathysim" and "topobathyserve"
+# Test implication: importing this module pins the "topobathykit" and "topobathyserve"
 # loggers to the level above for the rest of the process. Tests that assert on DEBUG
 # records must scope caplog to the package logger, for example
-# `caplog.set_level(logging.DEBUG, logger="topobathysim")`, rather than relying on root.
+# `caplog.set_level(logging.DEBUG, logger="topobathykit")`, rather than relying on root.
 root_logger = logging.getLogger()
 root_logger.setLevel(log_level)
 
@@ -117,7 +118,7 @@ for noisy_logger in [
 
 # Explicitly set level for our app loggers
 logging.getLogger("topobathyserve").setLevel(log_level)
-logging.getLogger("topobathysim").setLevel(log_level)
+logging.getLogger("topobathykit").setLevel(log_level)
 
 logger = logging.getLogger("topobathyserve")
 
@@ -257,7 +258,7 @@ def _zarr_zip_response(ds_out: xr.Dataset) -> FileResponse:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Load .env (Resolve from topobathysim root)
+    # Load .env (Resolve from topobathykit root)
     env_path = Path(__file__).resolve().parent.parent.parent / ".env"
     if env_path.exists():
         load_dotenv(env_path)
@@ -349,7 +350,7 @@ async def update_policy(
             raise HTTPException(status_code=400, detail="curations require base_yaml")
 
         try:
-            from topobathysim.policy.schema import FilterConfig
+            from topobathykit.policy.schema import FilterConfig
 
             policy = load_policy_from_str(request.base_yaml)
 
@@ -787,7 +788,7 @@ async def get_legend(policy_path: Annotated[Path, Depends(get_policy_path)]) -> 
     import matplotlib.colors as mcolors
     import matplotlib.pyplot as plt
 
-    from topobathysim.policy.loader import generate_provider_legend, load_policy
+    from topobathykit.policy.loader import generate_provider_legend, load_policy
 
     # Reload policy to be safe (or assume it's loaded in runtime, but runtime doesn't expose object easily)
     # We load it here to get the legend mapping
@@ -874,7 +875,7 @@ async def get_elevation(
                 # We do NOT use padded_bbox here anymore because run() caches
                 # by standardized grid cells (0.05 deg), not by arbitrary tile bboxes.
                 try:
-                    from topobathysim.runtime import get_cache_info_for_point
+                    from topobathykit.runtime import get_cache_info_for_point
 
                     cache_path, key_hash = get_cache_info_for_point(str(policy_path), lon, lat, res_meters)
                 except ValueError:
@@ -1428,7 +1429,7 @@ def get_xyz_tile(
     if format == "png":
         if style == "source":
             # Generate Legend Map for Dynamic Coloring
-            from topobathysim.policy.loader import generate_provider_legend, load_policy
+            from topobathykit.policy.loader import generate_provider_legend, load_policy
 
             # We have policy_path, but need the object.
             # load_policy is cached? Let's hope it's fast enough or LRU cached.
@@ -1528,7 +1529,7 @@ def get_xyz_tile(
 
 @app.get("/policy/reload")
 async def reload_policy_cache() -> dict[str, object]:
-    from topobathysim.policy.loader import clear_policy_cache
+    from topobathykit.policy.loader import clear_policy_cache
 
     clear_policy_cache()
     return {
@@ -1918,7 +1919,7 @@ async def analyze_coverage(
     policy_path: Annotated[Path, Depends(get_policy_path)],
 ) -> dict[str, Any]:
     """Dry-run coverage analyzer for a bounding box."""
-    from topobathysim.providers.registry import registry
+    from topobathykit.providers.registry import registry
 
     try:
         policy_input = request.policy_yaml
@@ -1948,7 +1949,7 @@ async def analyze_coverage(
         items = []
         try:
             if step.provider == "usgs_3dep":
-                from topobathysim.providers.base import matches_pattern
+                from topobathykit.providers.base import matches_pattern
 
                 raw_items = provider._query_stac_api(request.bbox, collection_id="3dep-seamless") or []  # type: ignore[attr-defined]
                 for i in raw_items:
@@ -1985,7 +1986,7 @@ async def analyze_coverage(
                     items.append({"name": name, "included": included, "reason": reason.strip(), "url": url})
 
             elif step.provider == "noaa_bluetopo":
-                from topobathysim.providers.base import matches_pattern
+                from topobathykit.providers.base import matches_pattern
 
                 w, s, east, n = provider._normalize_bbox(request.bbox)  # type: ignore[attr-defined]
 
@@ -2075,7 +2076,7 @@ async def analyze_coverage(
                         items.append({"name": name, "included": included, "reason": reason, "url": url})
 
             elif step.provider == "noaa_topobathy":
-                from topobathysim.providers.base import matches_pattern
+                from topobathykit.providers.base import matches_pattern
 
                 w, s, east, n = provider._normalize_bbox(request.bbox)  # type: ignore[attr-defined]
                 projects = provider.find_projects_by_box(w, s, east, n)  # type: ignore[attr-defined]
@@ -2141,8 +2142,8 @@ async def analyze_coverage(
                     )
 
             elif step.provider == "ncei_bag":
-                from topobathysim.providers.base import matches_pattern
-                from topobathysim.providers.ncei_bag import BAGDiscovery
+                from topobathykit.providers.base import matches_pattern
+                from topobathykit.providers.ncei_bag import BAGDiscovery
 
                 w, s, east, n = provider._normalize_bbox(request.bbox)  # type: ignore[attr-defined]
                 urls = BAGDiscovery.find_bags_by_bbox(w, s, east, n)

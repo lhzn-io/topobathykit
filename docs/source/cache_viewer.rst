@@ -3,7 +3,7 @@
 Cache Inventory Viewer & Manager
 ================================
 
-TopoBathySim includes a web-based **Cache Inventory Viewer** for inspecting and managing the multi-tiered caching system. This tool provides visibility into storage usage, cache age, and allows safe maintenance operations.
+topobathykit includes a web-based **Cache Inventory Viewer** for inspecting and managing the multi-tiered caching system. This tool provides visibility into storage usage, cache age, and allows safe maintenance operations.
 
 Access
 ------
@@ -27,7 +27,7 @@ Features
 Cache Tiers
 -----------
 
-TopoBathySim organizes data into 5 tiers of increasing persistence and reconstruction cost:
+topobathykit organizes data into 5 tiers of increasing persistence and reconstruction cost:
 
 +------+-------------------------+-----------------------------------------------+------------------------+---------------------+
 | Tier | Name                    | Description                                   | Path                   | Rebuild Cost        |

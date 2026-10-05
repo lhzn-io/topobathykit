@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from topobathysim.providers.base import Provider, sanitize_elevation_nodata
+from topobathykit.providers.base import Provider, sanitize_elevation_nodata
 
 
 class DummyProvider(Provider):

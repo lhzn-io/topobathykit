@@ -10,9 +10,9 @@ import xarray as xr
 import yaml
 from affine import Affine
 
-from topobathysim.providers.base import Provider
-from topobathysim.providers.registry import registry
-from topobathysim.runtime import run
+from topobathykit.providers.base import Provider
+from topobathykit.providers.registry import registry
+from topobathykit.runtime import run
 
 
 class MockProvider(Provider):

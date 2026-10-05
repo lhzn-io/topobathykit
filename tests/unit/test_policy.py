@@ -10,10 +10,10 @@ import pytest
 import xarray as xr
 import yaml
 
-from topobathysim.policy.loader import generate_provider_legend, hash_policy, load_policy
-from topobathysim.policy.schema import CompositionStep, FusionPolicy, VariableStrategy
-from topobathysim.providers.base import Provider
-from topobathysim.providers.registry import registry
+from topobathykit.policy.loader import generate_provider_legend, hash_policy, load_policy
+from topobathykit.policy.schema import CompositionStep, FusionPolicy, VariableStrategy
+from topobathykit.providers.base import Provider
+from topobathykit.providers.registry import registry
 
 
 # Mock Provider

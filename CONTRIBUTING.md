@@ -1,6 +1,6 @@
-# Contributing to TopoBathySim
+# Contributing to topobathykit
 
-TopoBathySim is a policy-driven **topobathymetric fusion runtime** (library + optional service). The core idea is to fuse heterogeneous geospatial layers into data-first products (`xarray.Dataset`) with **per-pixel provenance**.
+topobathykit is a policy-driven **topobathymetric fusion runtime** (library + optional service). The core idea is to fuse heterogeneous geospatial layers into data-first products (`xarray.Dataset`) with **per-pixel provenance**.
 
 We welcome contributions, especially **new dataset providers** and **policy presets** for regions outside our initial Northeast US focus.
 
@@ -78,13 +78,13 @@ Especially valuable:
 
 ## Development setup
 
-We recommend **Micromamba** (or Mamba/Conda) for development because TopoBathySim depends on compiled geospatial libraries such as GDAL/PDAL.
+We recommend **Micromamba** (or Mamba/Conda) for development because topobathykit depends on compiled geospatial libraries such as GDAL/PDAL.
 
 ### Option A: Micromamba (recommended)
 
 ```bash
 micromamba create -f environment.yml
-micromamba activate topobathysim
+micromamba activate topobathykit
 pip install -e .
 ```
 

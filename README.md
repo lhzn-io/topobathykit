@@ -1,17 +1,19 @@
-# TopoBathySim
+# topobathykit
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-![TopoBathySim 3D DEM Viewer](docs/source/_static/dem-viewer.png)
+![topobathykit 3D DEM Viewer](docs/source/_static/dem-viewer.png)
 
 **Policy-driven topobathymetric fusion runtime for data-first digital worlds.**
 
-TopoBathySim fuses heterogeneous elevation sources (global bathymetry, global land DEMs, and optional high‑resolution regional datasets) into seamless, analysis- and simulation-ready grids. It produces **data-first outputs** (`xarray.Dataset`) with **per-pixel provenance** (source masks), and optionally serves the same products over HTTP for real-time clients.
+topobathykit fuses heterogeneous elevation sources (global bathymetry, global land DEMs, and optional high‑resolution regional datasets) into seamless, analysis- and simulation-ready grids. It produces **data-first outputs** (`xarray.Dataset`) with **per-pixel provenance** (source masks), and optionally serves the same products over HTTP for real-time clients.
 
 - Primary output: **arrays + provenance**, not pretty pictures
 - PNG tiles and the viewer are **debug/QA tools** (seams, datum issues, coverage), not the product
 - Fusion behavior is defined by **YAML policy presets** you can edit and share
+
+topobathykit was named topobathysim until 2026-10-05 ("-sim" is reserved for code that runs simulations); GitHub redirects the old repository URLs. The package is `topobathykit`; `import topobathysim` still works for one release, with a `DeprecationWarning`. Environment variables use the `TOPOBATHYKIT_` prefix (the `TOPOBATHYSIM_` names are still read, with a warning), the default cache is `~/.cache/topobathykit`, and the conda environment is `topobathykit`.
 
 ## What you can do
 
@@ -52,7 +54,7 @@ Every fused variable includes a source mask (e.g., `source_elevation`) identifyi
 
 ## Data sources and built-in providers
 
-TopoBathySim includes a growing catalog of dataset providers. The current set reflects our initial focus on the **Northeast US** (where we have dense public coastal survey coverage). We warmly welcome contributors adding providers and policy presets for the EU, Asia-Pacific, and other regions.
+topobathykit includes a growing catalog of dataset providers. The current set reflects our initial focus on the **Northeast US** (where we have dense public coastal survey coverage). We warmly welcome contributors adding providers and policy presets for the EU, Asia-Pacific, and other regions.
 
 ### Global basemap (worldwide)
 
@@ -85,16 +87,16 @@ The service can be built and run in Docker. The `Dockerfile` defaults to `nvidia
 
 ```bash
 # x86_64 / WSL2 with NVIDIA GPU (default)
-docker build -t topobathysim .
-docker run --rm --gpus all -p 9595:9595 topobathysim
+docker build -t topobathykit .
+docker run --rm --gpus all -p 9595:9595 topobathykit
 
 # NVIDIA Jetson AGX Orin (JetPack 6.x)
-docker build --build-arg BASE_IMAGE=nvcr.io/nvidia/l4t-jetpack:r36.2.0 -t topobathysim .
-docker run --rm --gpus all -p 9595:9595 topobathysim
+docker build --build-arg BASE_IMAGE=nvcr.io/nvidia/l4t-jetpack:r36.2.0 -t topobathykit .
+docker run --rm --gpus all -p 9595:9595 topobathykit
 
 # macOS (Apple Silicon or Intel) via OrbStack / Docker Desktop — no GPU
-docker build --build-arg BASE_IMAGE=ubuntu:24.04 -t topobathysim .
-docker run --rm -p 9595:9595 topobathysim
+docker build --build-arg BASE_IMAGE=ubuntu:24.04 -t topobathykit .
+docker run --rm -p 9595:9595 topobathykit
 ```
 
 Validated platforms: x86_64 (RTX 5080, CUDA 12.6, Ubuntu 24.04), NVIDIA Jetson AGX Orin (JetPack 6.1 / L4T r36.2), and macOS Apple Silicon (OrbStack).
@@ -104,15 +106,15 @@ Validated platforms: x86_64 (RTX 5080, CUDA 12.6, Ubuntu 24.04), NVIDIA Jetson A
 Install (editable is recommended for development):
 
 ```bash
-git clone https://github.com/lhzn-io/topobathysim.git
-cd topobathysim
+git clone https://github.com/lhzn-io/topobathykit.git
+cd topobathykit
 pip install -e .
 ```
 
 Fuse elevation for a bounding box using a policy preset:
 
 ```python
-from topobathysim.runtime import run
+from topobathykit.runtime import run
 
 # bbox = (west, south, east, north)
 ds = run(
@@ -171,7 +173,7 @@ See `policies/README.md` for details, expected coverage, and suggested bounding 
 
 ## Output contract (data-first)
 
-TopoBathySim’s canonical output is an `xarray.Dataset`:
+topobathykit’s canonical output is an `xarray.Dataset`:
 
 - `elevation` (`y`, `x`) — fused elevation/depth in meters
 - `source_elevation` (`y`, `x`) — integer source mask (provider ID per pixel)
@@ -184,9 +186,9 @@ Metadata is attached at the dataset and variable level, including:
 
 ## International-friendly by design
 
-TopoBathySim is global-first: you can run it anywhere with the global basemap policy.
+topobathykit is global-first: you can run it anywhere with the global basemap policy.
 
-Some datasets and datum transformations are region-specific. When vertical datum or reference is ambiguous, TopoBathySim surfaces this explicitly in metadata and provenance rather than hiding assumptions.
+Some datasets and datum transformations are region-specific. When vertical datum or reference is ambiguous, topobathykit surfaces this explicitly in metadata and provenance rather than hiding assumptions.
 
 ## Contributing
 
@@ -219,7 +221,7 @@ If you have domain expertise for a region, you can encode it as a policy preset:
 
 ## Built with agentic engineering
 
-TopoBathySim is developed using [agentic engineering](https://simonwillison.net/2026/Feb/23/agentic-engineering-patterns/) practices — professional software development amplified by AI coding agents. The tools we use include [Antigravity](https://antigravity.dev) and [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
+topobathykit is developed using [agentic engineering](https://simonwillison.net/2026/Feb/23/agentic-engineering-patterns/) practices — professional software development amplified by AI coding agents. The tools we use include [Antigravity](https://antigravity.dev) and [Claude Code](https://docs.anthropic.com/en/docs/claude-code).
 
 Domain expertise, architectural decisions, and quality judgment remain human responsibilities. The agents accelerate implementation, catch bugs, and handle boilerplate — but every provider, policy, and fusion strategy reflects deliberate engineering choices informed by geospatial domain knowledge.
 

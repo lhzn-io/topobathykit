@@ -7,7 +7,7 @@ import pytest
 import xarray as xr
 from shapely.geometry import box
 
-from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+from topobathykit.providers.noaa_topobathy import NoaaTopobathyProvider
 
 
 @pytest.fixture
@@ -88,7 +88,7 @@ def test_find_project_by_box_failure(mock_provider: NoaaTopobathyProvider) -> No
 
     # Mock the build script to do nothing (prevent actual build attempting to run)
     with (
-        patch("topobathysim.scripts.build_noaa_index.main"),
+        patch("topobathykit.scripts.build_noaa_index.main"),
         pytest.raises(RuntimeError, match="NOAA Spatial Index is unavailable"),
     ):
         mock_provider.find_project_by_box(-73.0, 41.0, -72.0, 41.1)

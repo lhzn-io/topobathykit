@@ -4,7 +4,7 @@ Performance notes
 Reference development machines
 ------------------------------
 
-TopoBathySim has primarily been developed and tested on:
+topobathykit has primarily been developed and tested on:
 
 - ASUS ROG Strix Scar 16 laptop (64 GB RAM)
 - Mac Studio (M4 Max, 128 GB RAM)

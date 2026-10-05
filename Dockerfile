@@ -45,7 +45,7 @@ RUN pip install --upgrade pip setuptools wheel
 RUN pip install Cython hatchling scikit-build py-cpuinfo setuptools_scm
 
 # Copy Library and install it
-# We assume the build context is the root of topobathysim/
+# We assume the build context is the root of topobathykit/
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-build-isolation .

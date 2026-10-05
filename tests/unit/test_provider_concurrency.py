@@ -22,7 +22,7 @@ import pytest
 
 @pytest.fixture
 def topobathy_provider(tmp_path: Path) -> Any:
-    from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+    from topobathykit.providers.noaa_topobathy import NoaaTopobathyProvider
 
     # Reset singleton so we get a fresh instance with our tmp cache dir
     NoaaTopobathyProvider._singleton = None
@@ -129,7 +129,7 @@ def test_concurrent_fetch_tile_calls_use_correct_project_ids(
     def run_fetch(pid: str) -> None:
         with (
             patch.object(rioxarray, "open_rasterio", side_effect=fake_open_rasterio),
-            patch("topobathysim.providers.noaa_topobathy.FileLock"),
+            patch("topobathykit.providers.noaa_topobathy.FileLock"),
         ):
             provider.fetch_tile("tile_001.tif", project_id=pid)
 
@@ -169,7 +169,7 @@ def test_concurrent_fetch_layer_resolves_tiles_from_own_project_index(
     import geopandas as gpd
     from shapely.geometry import box
 
-    from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+    from topobathykit.providers.noaa_topobathy import NoaaTopobathyProvider
 
     provider = topobathy_provider
     provider._projects["20000"] = "Other_Project_20000"
@@ -201,7 +201,7 @@ def test_concurrent_fetch_layer_resolves_tiles_from_own_project_index(
     def run_fetch(pid: str) -> None:
         import contextlib
 
-        from topobathysim.providers.base import ProviderNoDataError
+        from topobathykit.providers.base import ProviderNoDataError
 
         with contextlib.suppress(ProviderNoDataError):  # the spy returns no data
             provider.fetch_layer(bbox=(-73.6, 40.6, -73.5, 40.7), filter={"project_id": pid})
@@ -228,7 +228,7 @@ def test_set_active_project_unknown_id_clears_stale_project(topobathy_provider: 
     import geopandas as gpd
     from shapely.geometry import box
 
-    from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+    from topobathykit.providers.noaa_topobathy import NoaaTopobathyProvider
 
     provider = topobathy_provider
     provider.fs = MagicMock(ls=MagicMock(return_value=[]))  # never list S3
@@ -253,7 +253,7 @@ def test_bluetopo_scheme_loaded_only_once_concurrently(tmp_path: Path) -> None:
     """gpd.read_file must be called exactly once even with 8 concurrent threads."""
     import geopandas as gpd
 
-    from topobathysim.providers.noaa_bluetopo import NoaaBlueTopoProvider
+    from topobathykit.providers.noaa_bluetopo import NoaaBlueTopoProvider
 
     # Reset singleton
     NoaaBlueTopoProvider._singleton = None
@@ -305,7 +305,7 @@ def test_usgs3dep_catalog_opened_only_once_concurrently(tmp_path: Path) -> None:
     """Client.open must be called exactly once even with 8 concurrent threads."""
     from pystac_client import Client
 
-    from topobathysim.providers.usgs_3dep import Usgs3DepProvider
+    from topobathykit.providers.usgs_3dep import Usgs3DepProvider
 
     # Reset singleton
     Usgs3DepProvider._instance = None
@@ -350,7 +350,7 @@ def test_usgs3dep_catalog_opened_only_once_concurrently(tmp_path: Path) -> None:
 
 def test_gebco_locks_lock_is_never_none(tmp_path: Path) -> None:
     """GEBCO2025Provider._locks_lock must be a real Lock (never None) at class definition time."""
-    from topobathysim.providers.gebco_2025 import GEBCO2025Provider
+    from topobathykit.providers.gebco_2025 import GEBCO2025Provider
 
     lock_type = type(threading.Lock())
     assert isinstance(GEBCO2025Provider._locks_lock, lock_type), (
@@ -369,7 +369,7 @@ def test_ncei_bag_fetch_layer_processes_finest_resolution_first(tmp_path: Path) 
     W00410 (4m) must be superseded by H13386 (50cm) even when find_bags_by_bbox
     returns them in the wrong (coarser-first) order due to a stale cache hit.
     """
-    from topobathysim.providers.ncei_bag import BAGProvider
+    from topobathykit.providers.ncei_bag import BAGProvider
 
     provider = BAGProvider(cache_dir=str(tmp_path))
 
@@ -388,7 +388,7 @@ def test_ncei_bag_fetch_layer_processes_finest_resolution_first(tmp_path: Path) 
 
     bbox = (-73.8, 40.8, -73.7, 40.9)
 
-    from topobathysim.providers.ncei_bag import BAGDiscovery
+    from topobathykit.providers.ncei_bag import BAGDiscovery
 
     with (
         patch.object(BAGDiscovery, "find_bags_by_bbox", return_value=stale_order_urls),
@@ -422,7 +422,7 @@ def test_memoize_lru_eviction_does_not_close_evicted_resources() -> None:
     """
     from typing import cast
 
-    from topobathysim.utils.cache import MemoizeWithLocks, concurrent_lru_cache
+    from topobathykit.utils.cache import MemoizeWithLocks, concurrent_lru_cache
 
     class TrackClose:
         def __init__(self, val: int) -> None:

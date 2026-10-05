@@ -7,7 +7,7 @@ import pytest
 import xarray as xr
 from dask.array.core import PerformanceWarning
 
-from topobathysim.providers.gebco_2025 import GEBCO2025Provider as Gebco2025
+from topobathykit.providers.gebco_2025 import GEBCO2025Provider as Gebco2025
 
 
 @pytest.fixture

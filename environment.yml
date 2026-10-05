@@ -1,4 +1,4 @@
-name: topobathysim
+name: topobathykit
 channels:
   - conda-forge
   - nodefaults

@@ -57,13 +57,13 @@ class NoaaBlueTopoProvider(Provider):
 
     # Persistent cache mapping tile_id -> resolved HTTPS URL.
     # Format: {"BA04XA": "https://noaa-ocs-nationalbathymetry-pds.s3.../BA04XA_20240101.tiff", ...}
-    # Stored in: ~/.cache/topobathysim/noaa_bluetopo/tile_url_cache.json
+    # Stored in: <cache root>/noaa_bluetopo/tile_url_cache.json
     #
     # BlueTopo tile filenames include a date stamp so their S3 keys change when the NOAA
     # team republishes a tile with updated bathymetry.  Invalidate this cache to pick up
     # renamed/republished tile assets:
     #   manage_discovery_cache.py --invalidate noaa_bluetopo
-    TILE_URL_CACHE_PATH = Path("~/.cache/topobathysim/noaa_bluetopo/tile_url_cache.json").expanduser()
+    TILE_URL_CACHE_PATH = get_cache_root() / "noaa_bluetopo" / "tile_url_cache.json"
 
     _singleton: ClassVar["NoaaBlueTopoProvider | None"] = None
     _initialized: bool

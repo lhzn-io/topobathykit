@@ -5,9 +5,9 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from topobathysim.policy.schema import CompositionStep, FusionPolicy, OperatorType, VariableStrategy
-from topobathysim.providers.base import Provider
-from topobathysim.runtime import run
+from topobathykit.policy.schema import CompositionStep, FusionPolicy, OperatorType, VariableStrategy
+from topobathykit.providers.base import Provider
+from topobathykit.runtime import run
 
 
 # Mock Provider that returns 3D data
@@ -103,7 +103,7 @@ def mock_policy() -> FusionPolicy:
 
 def test_runtime_enforces_2d(mock_policy: FusionPolicy) -> None:
     # REGISTER MOCKS
-    with patch("topobathysim.runtime.registry.get_provider_class") as mock_get_cls:
+    with patch("topobathykit.runtime.registry.get_provider_class") as mock_get_cls:
         # We need to dispatch based on provider name
         def get_cls(name: str) -> type[Provider]:
             if name == "mock_3d":
@@ -117,7 +117,7 @@ def test_runtime_enforces_2d(mock_policy: FusionPolicy) -> None:
         mock_get_cls.side_effect = get_cls
 
         # We must patch _resolve_policy because run() calls it now
-        with patch("topobathysim.runtime._resolve_policy", return_value=mock_policy):
+        with patch("topobathykit.runtime._resolve_policy", return_value=mock_policy):
             # 1. Test Single Band 3D (1, H, W) -> Should reduce to (H, W)
             # We construct a policy with just that step
             mock_policy.variables[0].steps = [

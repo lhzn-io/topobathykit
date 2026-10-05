@@ -1,12 +1,12 @@
-.. TopoBathySim documentation main file.
+.. topobathykit documentation main file.
 
-TopoBathySim
+topobathykit
 ============
 
-**TopoBathySim** is a policy-driven fusion runtime for seamless topobathymetric data products.
+**topobathykit** is a policy-driven fusion runtime for seamless topobathymetric data products.
 
 .. figure:: _static/dem-viewer.png
-   :alt: TopoBathySim Screenshot
+   :alt: topobathykit Screenshot
    :align: center
 
    *High-fidelity 3D perspective of fused topobathymetric surfaces.*

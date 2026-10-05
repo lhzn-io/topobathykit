@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from topobathysim.runtime import run
+from topobathykit.runtime import run
 
 # Create a custom logger
 logger = logging.getLogger(__name__)

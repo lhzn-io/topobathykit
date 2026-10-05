@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "topobathysim"
+name = "topobathykit"
 version = "0.1.0"
-description = "A high-performance engine fusing global bathymetry and sub-meter lidar into unified, simulation-ready digital worlds."
+description = "Policy-driven topobathymetric fusion: fuses overlapping elevation sources into seamless grids with per-pixel provenance."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { file = "LICENSE" }
@@ -63,10 +63,14 @@ dependencies = [
   "fastapi",
 ]
 
+[tool.hatch.build.targets.wheel]
+# topobathysim is a one-release alias for the package's former name.
+packages = ["src/topobathykit", "src/topobathysim"]
+
 [project.urls]
 Documentation = "https://topobathysim.docs.lhzn.io"
-Issues = "https://github.com/lhzn-io/topobathysim/issues"
-Source = "https://github.com/lhzn-io/topobathysim"
+Issues = "https://github.com/lhzn-io/topobathykit/issues"
+Source = "https://github.com/lhzn-io/topobathykit"
 
 [tool.hatch.envs.default]
 dependencies = [
@@ -76,7 +80,7 @@ dependencies = [
 
 [tool.hatch.envs.default.scripts]
 test = "pytest {args:tests}"
-cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=src/topobathysim --cov=tests {args:tests}"
+cov = "pytest --cov-report=term-missing --cov-config=pyproject.toml --cov=src/topobathykit --cov=tests {args:tests}"
 
 [tool.pytest.ini_options]
 addopts = "-v -m 'not network'"
@@ -124,7 +128,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["topobathysim"]
+known-first-party = ["topobathykit"]
 
 [tool.mypy]
 python_version = "3.12"

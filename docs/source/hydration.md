@@ -8,7 +8,7 @@ Hydration pre-warms the fused Zarr cache for a region so that subsequent
 Unlike `/fuse` (which is synchronous and returns data), `/hydrate` is an
 asynchronous workflow: it accepts a bounding box, splits it into 0.05° grid
 cells, processes each cell through the full fusion pipeline, writes results to
-`~/.cache/topobathysim/fused_zarr/`, and reports progress.
+`~/.cache/topobathykit/fused_zarr/`, and reports progress.
 
 ## Architecture
 
@@ -78,21 +78,21 @@ The `hydrate_cache` script provides two subcommands: `fuse` (zarr cells) and
 
 ```bash
 # Hydrate fused zarr cells (30m default)
-python -m topobathysim.scripts.hydrate_cache fuse -70.99 42.89 -70.49 43.26
+python -m topobathykit.scripts.hydrate_cache fuse -70.99 42.89 -70.49 43.26
 
 # 15m resolution with custom policy
-python -m topobathysim.scripts.hydrate_cache fuse -70.99 42.89 -70.49 43.26 \
+python -m topobathykit.scripts.hydrate_cache fuse -70.99 42.89 -70.49 43.26 \
   -r 15 \
-  -c config/topobathysim/policies/great_bay_estuary.yaml
+  -c config/topobathykit/policies/great_bay_estuary.yaml
 
 # Hydrate rendered PNG tiles at zoom 13
-python -m topobathysim.scripts.hydrate_cache tiles -70.99 42.89 -70.49 43.26 -z 13
+python -m topobathykit.scripts.hydrate_cache tiles -70.99 42.89 -70.49 43.26 -z 13
 
 # HTTP polling only (skip WebSocket)
-python -m topobathysim.scripts.hydrate_cache fuse -70.99 42.89 -70.49 43.26 --no-ws
+python -m topobathykit.scripts.hydrate_cache fuse -70.99 42.89 -70.49 43.26 --no-ws
 
 # Custom service URL
-python -m topobathysim.scripts.hydrate_cache fuse -70.99 42.89 -70.49 43.26 --url http://remote:9595
+python -m topobathykit.scripts.hydrate_cache fuse -70.99 42.89 -70.49 43.26 --url http://remote:9595
 ```
 
 **Arguments:**
@@ -186,7 +186,7 @@ policy YAML upload, and live progress monitoring via WebSocket.
 ## Grid cell caching
 
 Hydration splits the requested bbox into a fixed 0.05° grid. Each cell is
-cached independently at `~/.cache/topobathysim/fused_zarr/{hash}.zarr`, where
+cached independently at `~/.cache/topobathykit/fused_zarr/{hash}.zarr`, where
 the hash is derived from the policy content, cell bbox, and resolution.
 
 If you request a second bbox that overlaps a previously hydrated region, the
@@ -209,7 +209,7 @@ The hydration subprocess uses several strategies to limit peak memory:
 
 ## Job state file format
 
-State files are stored at `~/.cache/topobathysim/hydration_jobs/{job_id}.json`:
+State files are stored at `~/.cache/topobathykit/hydration_jobs/{job_id}.json`:
 
 ```json
 {

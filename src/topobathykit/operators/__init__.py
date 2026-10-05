@@ -1,5 +1,5 @@
 """
-Operators module for TopoBathySim.
+Operators module for topobathykit.
 
 Exposes geospatial operations like blending and fusion algorithms.
 """

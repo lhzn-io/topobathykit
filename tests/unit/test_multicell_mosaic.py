@@ -25,7 +25,7 @@ import pytest
 import xarray as xr
 import yaml
 
-from topobathysim.runtime import run
+from topobathykit.runtime import run
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -119,7 +119,7 @@ def test_offset_y_grids_produce_no_nan_after_mosaic(simple_policy_file: str) -> 
 
     # Bbox spans the 0.0° x-boundary but stays well inside one y-band (0.0-0.05°)
     # to avoid also crossing the y-boundary and generating 4 cells instead of 2.
-    with patch("topobathysim.runtime._run_cell", side_effect=mock_run_cell):
+    with patch("topobathykit.runtime._run_cell", side_effect=mock_run_cell):
         ds = run(
             simple_policy_file,
             bbox=(-0.01, 0.001, 0.04, 0.049),
@@ -153,7 +153,7 @@ def test_single_cell_bbox_bypasses_nan_fill(simple_policy_file: str) -> None:
     y_vals = np.linspace(0.001, 0.049, 25)
     cell = _cell_ds(0.001, 0.049, y_vals, elev_val=7.5)
 
-    with patch("topobathysim.runtime._run_cell", return_value=cell):
+    with patch("topobathykit.runtime._run_cell", return_value=cell):
         ds = run(
             simple_policy_file,
             bbox=(0.001, 0.001, 0.049, 0.049),
@@ -198,7 +198,7 @@ def test_genuine_edge_nan_not_filled_by_mosaic(simple_policy_file: str) -> None:
         call_count["n"] += 1
         return ds
 
-    with patch("topobathysim.runtime._run_cell", side_effect=mock_run_cell):
+    with patch("topobathykit.runtime._run_cell", side_effect=mock_run_cell):
         ds = run(
             simple_policy_file,
             bbox=(-0.01, 0.001, 0.04, 0.049),

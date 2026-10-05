@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from topobathysim.vdatum import VDatumNoDataError, VDatumResolver
+from topobathykit.vdatum import VDatumNoDataError, VDatumResolver
 
 
 @pytest.fixture(autouse=True)
@@ -16,12 +16,12 @@ def isolated_vdatum_cache(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Non
     mock, so the expected exceptions are never raised. The row also persists on
     disk across runs, which made the failure machine-dependent.
     """
-    monkeypatch.setattr("topobathysim.vdatum.VDATUM_DB_PATH", tmp_path / "vdatum.sqlite")
+    monkeypatch.setattr("topobathykit.vdatum.VDATUM_DB_PATH", tmp_path / "vdatum.sqlite")
 
 
 def test_vdatum_valid_response() -> None:
     """Test that a valid t_z response is returned correctly."""
-    with patch("topobathysim.vdatum.requests.Session.get") as mock_get:
+    with patch("topobathykit.vdatum.requests.Session.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"t_z": "1.5"}
         mock_response.raise_for_status.return_value = None
@@ -36,7 +36,7 @@ def test_vdatum_valid_response() -> None:
 
 def test_vdatum_nodata_response_raises_value_error() -> None:
     """Test that extreme NoData values (-999999.0) raise a VDatumNoDataError."""
-    with patch("topobathysim.vdatum.requests.Session.get") as mock_get:
+    with patch("topobathykit.vdatum.requests.Session.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"t_z": "-999999.0"}
         mock_response.raise_for_status.return_value = None
@@ -51,7 +51,7 @@ def test_vdatum_nodata_response_raises_value_error() -> None:
 
 def test_vdatum_missing_tz_raises_value_error() -> None:
     """Test that a missing t_z field raises a ValueError."""
-    with patch("topobathysim.vdatum.requests.Session.get") as mock_get:
+    with patch("topobathykit.vdatum.requests.Session.get") as mock_get:
         mock_response = MagicMock()
         mock_response.json.return_value = {"error": "Out of bounds"}
         mock_response.raise_for_status.return_value = None
@@ -75,11 +75,11 @@ def test_vdatum_retries_read_timeouts_with_backoff() -> None:
     """Transient timeouts are retried with exponential backoff, then succeed."""
     import requests
 
-    from topobathysim.vdatum import VDATUM_BACKOFF_S
+    from topobathykit.vdatum import VDATUM_BACKOFF_S
 
     with (
-        patch("topobathysim.vdatum.requests.Session.get") as mock_get,
-        patch("topobathysim.vdatum.time.sleep") as mock_sleep,
+        patch("topobathykit.vdatum.requests.Session.get") as mock_get,
+        patch("topobathykit.vdatum.time.sleep") as mock_sleep,
     ):
         mock_get.side_effect = [requests.ReadTimeout("read timed out"), requests.ReadTimeout("again"), _ok()]
         VDatumResolver.get_mllw_to_navd88_offset.cache_clear()
@@ -94,12 +94,12 @@ def test_vdatum_gives_up_after_bounded_attempts(monkeypatch: pytest.MonkeyPatch)
     """A persistent outage raises VDatumUnavailableError after a bounded number of attempts."""
     import requests
 
-    from topobathysim.vdatum import VDatumUnavailableError
+    from topobathykit.vdatum import VDatumUnavailableError
 
     monkeypatch.setenv("TOPOBATHY_VDATUM_ATTEMPTS", "4")
     with (
-        patch("topobathysim.vdatum.requests.Session.get") as mock_get,
-        patch("topobathysim.vdatum.time.sleep"),
+        patch("topobathykit.vdatum.requests.Session.get") as mock_get,
+        patch("topobathykit.vdatum.time.sleep"),
     ):
         mock_get.side_effect = requests.ReadTimeout("read timed out")
         VDatumResolver.get_mllw_to_navd88_offset.cache_clear()
@@ -118,8 +118,8 @@ def test_vdatum_does_not_retry_client_errors() -> None:
     response.status_code = 400
     response.raise_for_status.side_effect = requests.HTTPError("400 Bad Request", response=response)
     with (
-        patch("topobathysim.vdatum.requests.Session.get", return_value=response) as mock_get,
-        patch("topobathysim.vdatum.time.sleep") as mock_sleep,
+        patch("topobathykit.vdatum.requests.Session.get", return_value=response) as mock_get,
+        patch("topobathykit.vdatum.time.sleep") as mock_sleep,
     ):
         VDatumResolver.get_mllw_to_navd88_offset.cache_clear()
 
@@ -134,11 +134,11 @@ def test_vdatum_outage_is_not_mistaken_for_no_coverage() -> None:
     """The robust search must not treat an outage as a NoData point and probe a ring of points."""
     import requests
 
-    from topobathysim.vdatum import VDatumUnavailableError
+    from topobathykit.vdatum import VDatumUnavailableError
 
     with (
-        patch("topobathysim.vdatum.requests.Session.get") as mock_get,
-        patch("topobathysim.vdatum.time.sleep"),
+        patch("topobathykit.vdatum.requests.Session.get") as mock_get,
+        patch("topobathykit.vdatum.time.sleep"),
     ):
         mock_get.side_effect = requests.ConnectionError("connection refused")
         VDatumResolver.get_mllw_to_navd88_offset.cache_clear()

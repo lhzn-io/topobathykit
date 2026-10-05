@@ -24,7 +24,7 @@ def main() -> None:
     # Set Debug Level Environment Variable
     import os
 
-    os.environ["TOPOBATHYSIM_DEBUG"] = str(args.debug)
+    os.environ["TOPOBATHYKIT_DEBUG"] = str(args.debug)
 
     # Default to 2 workers. Hydration job state is persisted to disk (JSON files),
     # so multi-worker is safe. Only the _HYDRATE_PROCESSES dict (subprocess handles)

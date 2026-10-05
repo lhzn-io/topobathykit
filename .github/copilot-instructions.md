@@ -1,4 +1,4 @@
-# TopoBathySim Copilot Instructions
+# topobathykit Copilot Instructions
 
 ## 🧠 Project Architecture & Core Concepts
 
@@ -10,7 +10,7 @@
   4. **Tier 3 (Regional)**: NOAA BlueTopo.
   5. **Tier 4 (Global Fallback)**: GEBCO 2025.
 - **Microservice**: `service/topobathyserve` is a FastAPI app serving tiles (`/tiles/{z}/{x}/{y}`) and raw NumPy buffers.
-- **Data Flow**: `Runtime` (in `src/topobathysim/runtime.py`) orchestrates data fetching and fusion based on YAML policies. It uses `Policy` objects to define fusion steps.
+- **Data Flow**: `Runtime` (in `src/topobathykit/runtime.py`) orchestrates data fetching and fusion based on YAML policies. It uses `Policy` objects to define fusion steps.
 
 ## 🛠️ Tech Stack & Conventions
 
@@ -18,7 +18,7 @@
 - **Core Libs**: `xarray`/`rioxarray` (raster manip), `numpy` (math), `pdal` (point clouds), `bmi-topography` (standard fetching).
 - **Environment**: **Micromamba** is preferred due to complex binary deps (`gdal`, `pdal`).
   - *Warning*: `bmi-topography` version is pinned (~0.9.0); handle upgrades with caution.
-  - **CRITICAL**: Always use `micromamba run -n topobathysim <command>` or `micromamba activate topobathysim` before running any Python code (including pytest/pip).
+  - **CRITICAL**: Always use `micromamba run -n topobathykit <command>` or `micromamba activate topobathykit` before running any Python code (including pytest/pip).
 - **Linting/Formatting**: `ruff` for linting/formatting, `mypy` for static analysis (configured in `pyproject.toml`).
   - **CRITICAL**: Avoid `E501` line-length violations. Keep lines under 110 characters (or as configured in `pyproject.toml`). Break long strings, complex imports, and nested calls into multiple lines.
 - **Path Handling**: Use `pathlib.Path` over `os.path`.
@@ -45,14 +45,14 @@
 - **Running Tests**: `pytest` or `hatch run test`.
 - **Debugging**:
   - Use the built-in viewer: `python service/run_server.py`, then open `http://localhost:9595/viewer`.
-  - Check `~/.cache/topobathysim` for cached COGs/LAZ files if data looks weird.
+  - Check `~/.cache/topobathykit` for cached COGs/LAZ files if data looks weird.
 
 ### 4. Common Tasks & Commands
 
 - **Start Server**: `python service/run_server.py`
 - **Lint/Format**: `pre-commit run --all-files` or `ruff check .`
-- **Tests**: `python -m pytest tests/unit` (offline, about 70 s) and `python -m pytest tests/integration` (live NOAA/USGS endpoints, 10 to 12 minutes; `test_wlis_fusion` also needs a built NOAA spatial index). `tests/conftest.py` puts `service/` on `sys.path`, so no `PYTHONPATH` export is needed. Use the `topobathysim` micromamba env.
-- **Clean Cache**: `rm -rf ~/.cache/topobathysim` (Useful when debugging bad downloads).
+- **Tests**: `python -m pytest tests/unit` (offline, about 70 s) and `python -m pytest tests/integration` (live NOAA/USGS endpoints, 10 to 12 minutes; `test_wlis_fusion` also needs a built NOAA spatial index). `tests/conftest.py` puts `service/` on `sys.path`, so no `PYTHONPATH` export is needed. Use the `topobathykit` micromamba env.
+- **Clean Cache**: `rm -rf ~/.cache/topobathykit` (Useful when debugging bad downloads).
 
 ### 5. Git Operations
 

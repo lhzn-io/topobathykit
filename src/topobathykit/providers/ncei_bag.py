@@ -496,15 +496,15 @@ class BAGDiscovery:
     QUERY_URL = "https://services2.arcgis.com/C8EMgrsFcRFL6LrL/arcgis/rest/services/NOS_Hydro_Surveys/FeatureServer/0/query"
 
     # Persistent Cache for Redirects (HTML Landing Page -> .bag URL)
-    # Stored in ~/.cache/topobathysim/metadata/ncei_bag_redirects.json
-    REDIRECT_CACHE_PATH = Path("~/.cache/topobathysim/metadata/ncei_bag_redirects.json").expanduser()
+    # Stored in <cache root>/metadata/ncei_bag_redirects.json
+    REDIRECT_CACHE_PATH = get_cache_root() / "metadata" / "ncei_bag_redirects.json"
 
     # Persistent Cache for BBox -> BAG URL list discovery results
-    # Stored in ~/.cache/topobathysim/ncei_bag/discovery_cache.json
+    # Stored in <cache root>/ncei_bag/discovery_cache.json
     # Format: {"west_south_east_north": ["https://...bag", ...], ...}
     # Invalidate to discover newly published multibeam surveys from NCEI.
     # See: manage_discovery_cache.py --invalidate ncei_bag
-    DISCOVERY_CACHE_PATH = Path("~/.cache/topobathysim/ncei_bag/discovery_cache.json").expanduser()
+    DISCOVERY_CACHE_PATH = get_cache_root() / "ncei_bag" / "discovery_cache.json"
 
     @classmethod
     def _read_bag_cached(cls, local_path: Path) -> xr.DataArray | None:

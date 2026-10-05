@@ -187,7 +187,7 @@ key is a SHA256 hash of the policy content + bbox + resolution, so:
 - A custom policy request never collides with a default policy request.
 - Modifying a single line in the YAML produces a different cache key.
 
-Cached results live at `~/.cache/topobathysim/fused_zarr/{hash}.zarr`.
+Cached results live at `~/.cache/topobathykit/fused_zarr/{hash}.zarr`.
 
 ## Error Handling
 
@@ -202,4 +202,4 @@ Cached results live at `~/.cache/topobathysim/fused_zarr/{hash}.zarr`.
 - Zarr is **chunked** and supports streaming access via fsspec (future enhancement)
 - GeoTIFF returns a single monolithic file
 - Default resolution is 30m; increase for faster response times
-- Results are cached in `~/.cache/topobathysim/fused_zarr/` by policy, bbox, and resolution
+- Results are cached in `~/.cache/topobathykit/fused_zarr/` by policy, bbox, and resolution

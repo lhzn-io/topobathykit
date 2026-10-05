@@ -196,7 +196,7 @@ class ProviderFetchError(RuntimeError):
 
 class Provider(ABC):
     """
-    Abstract Base Class for TopoBathySim data providers.
+    Abstract Base Class for topobathykit data providers.
 
     All data sources (GEBCO, BlueTopo, BAG, etc.) must implement this interface
     to ensure a unified data access layer for the fusion runtime.

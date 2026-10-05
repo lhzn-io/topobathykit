@@ -4,7 +4,7 @@ import math
 import pytest
 import xarray as xr
 
-from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+from topobathykit.providers.noaa_topobathy import NoaaTopobathyProvider
 
 # Configure logger for tests
 logger = logging.getLogger(__name__)

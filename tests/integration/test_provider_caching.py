@@ -4,8 +4,8 @@ from typing import Any
 import pytest
 import xarray as xr
 
-from topobathysim.providers.usgs_3dep import Usgs3DepProvider
-from topobathysim.providers.usgs_lidar import UsgsLidarProvider
+from topobathykit.providers.usgs_3dep import Usgs3DepProvider
+from topobathykit.providers.usgs_lidar import UsgsLidarProvider
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 @pytest.fixture
 def temp_cache_dir(tmp_path: Any) -> Any:
     """Provide a temporary cache directory for isolated tests."""
-    cache_dir = tmp_path / "topobathysim_cache"  # type: ignore
+    cache_dir = tmp_path / "topobathykit_cache"  # type: ignore
     cache_dir.mkdir()
     return cache_dir
 

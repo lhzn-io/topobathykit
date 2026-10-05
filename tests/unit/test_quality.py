@@ -1,6 +1,6 @@
 import numpy as np
 
-from topobathysim.quality import QualityClass, TIDClassifier, source_report
+from topobathykit.quality import QualityClass, TIDClassifier, source_report
 
 
 def test_classifier_direct() -> None:

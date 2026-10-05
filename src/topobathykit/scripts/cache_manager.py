@@ -1,8 +1,8 @@
 """
-TopoBathySim Cache Manager
+topobathykit Cache Manager
 ==========================
 
-Unified CLI for inspecting, verifying, and purging the TopoBathySim cache hierarchy.
+Unified CLI for inspecting, verifying, and purging the topobathykit cache hierarchy.
 Organises operations by tier — from the safest (output tiles) to the most destructive
 (raw downloaded source files).
 
@@ -32,12 +32,12 @@ Usage
 
 .. code-block:: bash
 
-    python -m topobathysim.scripts.cache_manager            # interactive menu (TTY)
-    python -m topobathysim.scripts.cache_manager --check    # integrity audit
-    python -m topobathysim.scripts.cache_manager --clean    # delete corrupt/stale files
-    python -m topobathysim.scripts.cache_manager --purge 1  # purge output tiles
-    python -m topobathysim.scripts.cache_manager --purge 4  # purge discovery caches
-    python -m topobathysim.scripts.cache_manager --purge all --dry-run
+    python -m topobathykit.scripts.cache_manager            # interactive menu (TTY)
+    python -m topobathykit.scripts.cache_manager --check    # integrity audit
+    python -m topobathykit.scripts.cache_manager --clean    # delete corrupt/stale files
+    python -m topobathykit.scripts.cache_manager --purge 1  # purge output tiles
+    python -m topobathykit.scripts.cache_manager --purge 4  # purge discovery caches
+    python -m topobathykit.scripts.cache_manager --purge all --dry-run
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ from rich.text import Text
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-from topobathysim.config import get_cache_root
+from topobathykit.config import get_cache_root
 
 CACHE_ROOT = get_cache_root()
 
@@ -540,7 +540,7 @@ def _render_status_table() -> Table:
     """Compact 5-row tier summary used as the TUI header."""
     total = sum(t.size_bytes() for t in TIERS)
     table = Table(
-        title=(f"[bold cyan]TopoBathySim Cache[/]  [dim]{CACHE_ROOT}  ·  {_fmt_size(total)} total[/]"),
+        title=(f"[bold cyan]topobathykit Cache[/]  [dim]{CACHE_ROOT}  ·  {_fmt_size(total)} total[/]"),
         box=box.ROUNDED,
         show_header=True,
         header_style="bold dim",
@@ -559,7 +559,7 @@ def _render_status_table() -> Table:
         num_style = "bold yellow" if tier.warning else "bold cyan"
         name_text = Text()
         if tier.warning:
-            name_text.append("⚠  ", style="bold yellow")
+            name_text.append("!  ", style="bold yellow")
         name_text.append(tier.name, style="bold yellow" if tier.warning else "")
         dot = Text("●  ", style="green" if items else "dim")
         size_t = Text(_fmt_size(sz) if items else "—", style="dim" if not items else "")
@@ -836,7 +836,7 @@ def _render_status_report(c: Console, d: _StatusData) -> None:
         Panel(
             f"[bold]Cache root:[/]  [cyan]{CACHE_ROOT}[/]\n"
             f"[bold]Total size:[/]  [bold green]{_fmt_size(d.total_bytes)}[/]",
-            title="[bold cyan]TopoBathySim — Detailed Cache Status[/]",
+            title="[bold cyan]topobathykit — Detailed Cache Status[/]",
             border_style="cyan",
             padding=(1, 2),
         )
@@ -986,7 +986,7 @@ def _render_status_report(c: Console, d: _StatusData) -> None:
 
     # ── Tier 5 ────────────────────────────────────────────────────
     c.print()
-    c.rule("[bold yellow]Tier 5 ⚠ — Raw Source Files[/]  [dim](download providers only)[/]")
+    c.rule("[bold yellow]Tier 5 ! — Raw Source Files[/]  [dim](download providers only)[/]")
     t = Table(box=box.SIMPLE, show_header=True, header_style="dim")
     t.add_column("Provider", style="cyan", min_width=18)
     t.add_column("Files", justify="right", width=8)
@@ -1034,7 +1034,7 @@ def _render_status_report(c: Console, d: _StatusData) -> None:
 
 def _render_tier_panel(tier: CacheTier) -> Panel:
     title_color = "yellow" if tier.warning else "cyan"
-    warn_tag = "  [bold yellow]⚠  destructive / slow to rebuild[/]" if tier.warning else ""
+    warn_tag = "  [bold yellow]!  destructive / slow to rebuild[/]" if tier.warning else ""
     content = Text.from_markup(tier.long_desc.replace("WARNING:", "[bold red]WARNING:[/]"))
     return Panel(
         content,
@@ -1134,7 +1134,7 @@ def _scan_global_orphans(clean: bool = False, lock_timeout: int = 3600) -> tuple
                 else:
                     console.print(f"  [yellow]![/] {rel_path}  [dim]({_fmt_age(age)})[/]")
         except Exception as e:
-            console.print(f"  [red]✗[/] {p.name}: {e}")
+            console.print(f"  [red]x[/] {p.name}: {e}")
             failed_count += 1
 
     if stale_count == 0:
@@ -1249,7 +1249,7 @@ def _do_purge(tier: CacheTier, dry_run: bool = False) -> tuple[int, int]:
             console.print(f"  [green]✓[/] [dim]{p}[/]")
             removed += 1
         except Exception as e:
-            console.print(f"  [red]✗[/] {p}: {e}")
+            console.print(f"  [red]x[/] {p}: {e}")
             failed += 1
     return removed, failed
 
@@ -1277,7 +1277,7 @@ def _purge_tier_with_confirm(tier: CacheTier, dry_run: bool = False, yes: bool =
         console.print(f"  [dim]Tier {tier.number} is already empty — nothing to delete.[/]")
         return False
 
-    warn_tag = "  [bold yellow]⚠  HOURS to rebuild[/]" if tier.warning else ""
+    warn_tag = "  [bold yellow]!  HOURS to rebuild[/]" if tier.warning else ""
     console.print(f"\n[bold]Tier {tier.number}: {tier.name}[/]{warn_tag}")
     console.print(f"  {len(paths)} item(s) — [bold]{_fmt_size(tier.size_bytes())}[/]")
 
@@ -1353,7 +1353,7 @@ def _tui_tier_checkbox(prompt: str) -> list[CacheTier] | None:
     for tier in TIERS:
         items = tier.item_count()
         sz = _fmt_size(tier.size_bytes()) if items else "empty"
-        warn = " ⚠" if tier.warning else ""
+        warn = " !" if tier.warning else ""
         label = f"[{tier.number}]{warn}  {tier.name:<30}  {sz:>9}  ({items} items)"
         choices.append(questionary.Choice(label, value=tier, disabled=None if items else "empty"))
     result: list[CacheTier] | None = questionary.checkbox(prompt, choices=choices, style=_get_qstyle()).ask()
@@ -1380,7 +1380,7 @@ def cmd_interactive(lock_timeout: int = 3600) -> None:
     console.print()
     console.print(
         Panel(
-            "[bold cyan]TopoBathySim Cache Manager[/]\n"
+            "[bold cyan]topobathykit Cache Manager[/]\n"
             "[dim]Arrow keys to navigate · Enter to select · q to quit[/]",
             border_style="cyan",
             padding=(0, 2),
@@ -1432,7 +1432,7 @@ def cmd_interactive(lock_timeout: int = 3600) -> None:
             summary.add_column("", min_width=30)
             summary.add_column("", justify="right", width=10, style="bold")
             for tier in selected:
-                warn = " [bold yellow]⚠[/]" if tier.warning else ""
+                warn = " [bold yellow]![/]" if tier.warning else ""
                 summary.add_row(f"  Tier {tier.number}{warn}", tier.name, _fmt_size(tier.size_bytes()))
             console.print(summary)
 
@@ -1443,7 +1443,7 @@ def cmd_interactive(lock_timeout: int = 3600) -> None:
             for tier in selected:
                 if tier.warning:
                     console.print()
-                    console.print("[bold yellow]  ⚠  Tier 5 contains raw downloaded source files.[/]")
+                    console.print("[bold yellow]  !  Tier 5 contains raw downloaded source files.[/]")
                     console.print("[yellow]  Re-downloading may take many hours.[/]")
                     answer = _tui_text('  Type "yes" to confirm deletion of raw files')
                     if answer != "yes":
@@ -1466,7 +1466,7 @@ def cmd_interactive(lock_timeout: int = 3600) -> None:
                             shutil.rmtree(p) if p.is_dir() else p.unlink()
                             removed += 1
                         except Exception as e:
-                            console.print(f"  [red]✗[/] {p}: {e}")
+                            console.print(f"  [red]x[/] {p}: {e}")
                             failed += 1
                         progress.advance(task)
 
@@ -1495,7 +1495,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         prog="cache_manager",
         description=(
-            "Inspect, verify, and purge the TopoBathySim cache hierarchy.\n\n"
+            "Inspect, verify, and purge the topobathykit cache hierarchy.\n\n"
             "Run without arguments for the interactive menu (requires TTY)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,

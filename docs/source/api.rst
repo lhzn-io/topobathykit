@@ -1,7 +1,7 @@
 Runtime Engine
 --------------
 
-.. automodule:: topobathysim.runtime
+.. automodule:: topobathykit.runtime
    :members:
    :undoc-members:
    :show-inheritance:
@@ -9,7 +9,7 @@ Runtime Engine
 Policy Schema
 -------------
 
-.. automodule:: topobathysim.policy.schema
+.. automodule:: topobathykit.policy.schema
    :members:
    :undoc-members:
    :show-inheritance:
@@ -17,17 +17,17 @@ Policy Schema
 Providers
 ---------
 
-.. automodule:: topobathysim.providers.base
+.. automodule:: topobathykit.providers.base
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: topobathysim.providers.gebco_2025
+.. automodule:: topobathykit.providers.gebco_2025
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: topobathysim.providers.ncei_bag
+.. automodule:: topobathykit.providers.ncei_bag
    :members:
    :undoc-members:
    :show-inheritance:

@@ -1,7 +1,7 @@
 import numpy as np
 import xarray as xr
 
-from topobathysim.fusion import FusionEngine
+from topobathykit.fusion import FusionEngine
 
 
 def test_fuse_seamline_gap_fill() -> None:

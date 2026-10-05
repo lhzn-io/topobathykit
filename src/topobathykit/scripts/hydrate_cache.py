@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Hydrate the TopoBathySim cache.
+Hydrate the topobathykit cache.
 
 Subcommands:
     fuse   — Hydrate fused zarr cells for a bbox + resolution via the /hydrate API.
     tiles  — Hydrate rendered PNG tiles for a bbox + zoom level via the /tiles API.
 
 Usage:
-    python -m topobathysim.scripts.hydrate_cache fuse  WEST SOUTH EAST NORTH -r 15 -c policy.yaml
-    python -m topobathysim.scripts.hydrate_cache tiles WEST SOUTH EAST NORTH -z 13
+    python -m topobathykit.scripts.hydrate_cache fuse  WEST SOUTH EAST NORTH -r 15 -c policy.yaml
+    python -m topobathykit.scripts.hydrate_cache tiles WEST SOUTH EAST NORTH -z 13
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ def _print_fuse_status(status: dict) -> None:
 
     if status.get("status") in ("completed", "failed") and failed > 0:
         print("\n" + "=" * 80)
-        print("⚠️  WARNING: Some cells failed to hydrate. This is commonly caused by")
+        print("!  WARNING: Some cells failed to hydrate. This is commonly caused by")
         print("   Out-Of-Memory (OOM) / ArrayMemoryError exceptions when SciPy interpolates")
         print("   massive gaps across too many concurrent workers.")
         print("   ")
@@ -206,12 +206,12 @@ def cmd_tiles(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="hydrate_cache",
-        description="Hydrate the TopoBathySim cache (fused zarr cells or rendered tiles).",
+        description="Hydrate the topobathykit cache (fused zarr cells or rendered tiles).",
     )
     parser.add_argument(
         "--url",
         default="http://localhost:9595",
-        help="Base URL of the topobathysim service (default: http://localhost:9595)",
+        help="Base URL of the topobathykit service (default: http://localhost:9595)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

@@ -9,10 +9,12 @@ from typing import Any
 
 import requests  # type: ignore
 
+from .config import get_cache_root
+
 logger = logging.getLogger(__name__)
 
-# Respects TOPOBATHYSIM_CACHE_DIR so the db lands on the mounted volume in Docker
-VDATUM_CACHE_DIR = Path(os.getenv("TOPOBATHYSIM_CACHE_DIR", "~/.cache/topobathysim")).expanduser()
+# Respects TOPOBATHYKIT_CACHE_DIR so the db lands on the mounted volume in Docker
+VDATUM_CACHE_DIR = get_cache_root()
 VDATUM_DB_PATH = VDATUM_CACHE_DIR / "vdatum.sqlite"
 
 _DDL = """

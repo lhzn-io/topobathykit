@@ -8,7 +8,7 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+from topobathykit.providers.noaa_topobathy import NoaaTopobathyProvider
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 @pytest.fixture
 def temp_cache_dir(tmp_path: Path) -> Path:
     """Provide a temporary cache directory for isolated tests."""
-    cache_dir = tmp_path / "topobathysim_cache"
+    cache_dir = tmp_path / "topobathykit_cache"
     cache_dir.mkdir()
     return cache_dir
 
@@ -41,10 +41,10 @@ def test_topobathy_index_cache_hit_prevents_network(
     3. Does NOT attempt to download the index.
     """
     # Scope to the package logger, not just root: importing the FastAPI app
-    # (service/topobathyserve/main.py) pins the "topobathysim" logger to INFO at
+    # (service/topobathyserve/main.py) pins the "topobathykit" logger to INFO at
     # import time, which drops the provider's DEBUG cache-hit records before
     # they reach caplog when this test runs after test_api_caching.
-    caplog.set_level(logging.DEBUG, logger="topobathysim")
+    caplog.set_level(logging.DEBUG, logger="topobathykit")
 
     project_id = "TEST_PROJECT_1234"
     folder_name = "test_folder_1234"
@@ -174,7 +174,7 @@ def test_topobathy_index_cache_hit_zip(temp_cache_dir: Path, caplog: Any) -> Non
     """
     # See note in test_topobathy_index_cache_hit_prevents_network: scope to the
     # package logger so an earlier app import cannot suppress DEBUG records.
-    caplog.set_level(logging.DEBUG, logger="topobathysim")
+    caplog.set_level(logging.DEBUG, logger="topobathykit")
 
     project_id = "TEST_ZIP_PROJECT_5678"
 

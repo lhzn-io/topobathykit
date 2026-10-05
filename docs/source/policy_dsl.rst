@@ -1,7 +1,7 @@
 Fusion Policy DSL
 =================
 
-TopoBathySim logic is defined in **Fusion Policy** files (YAML). A policy describes *what* data to fetch and *how* to combine it to create a variable (e.g., elevation).
+topobathykit logic is defined in **Fusion Policy** files (YAML). A policy describes *what* data to fetch and *how* to combine it to create a variable (e.g., elevation).
 
 Structure
 ---------

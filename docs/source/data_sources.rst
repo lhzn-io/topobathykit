@@ -1,7 +1,7 @@
 Data Sources & Acknowledgements
 =============================
 
-**TopoBathySim** relies on a federation of open-access geospatial datasets. We gratefully acknowledge the following agencies and specific surveys used for development, validation, and simulation.
+**topobathykit** relies on a federation of open-access geospatial datasets. We gratefully acknowledge the following agencies and specific surveys used for development, validation, and simulation.
 
 The datasets are listed below in inverse order of priority (from global context to high-resolution survey truth).
 
@@ -68,7 +68,7 @@ NOAA National Geodetic Survey (NGS)
 
     **Coverage Maximization & Survey Selection Strategy**
 
-    To manage the hundreds of overlapping proprietary surveys available via NOAA's Digital Coast, TopoBathySim employs a dynamic **Spatial Index** to select the optimal data source for any given area of interest.
+    To manage the hundreds of overlapping proprietary surveys available via NOAA's Digital Coast, topobathykit employs a dynamic **Spatial Index** to select the optimal data source for any given area of interest.
 
     When a simulation region intersects multiple available surveys, the system prioritizes them using the following **Fusion Hierarchy**:
 
@@ -94,9 +94,9 @@ NOAA NCEI - Bathymetric Attributed Grid (BAG)
 Fusion Strategy: Redundancy & Spatial Overwrite
 -----------------------------------------------
 
-A frequent scenario in TopoBathySim is the overlap between **BlueTopo** (Tier 2, Regional) and **NCEI BAG** (Tier 0, High-Res Truth). BlueTopo is distributed as large geographic mosaic tiles (e.g., ``BH5245GP``) which contain compiled data from dozens of underlying surveys. Many of the newer sub-surveys inside these mosaics are also natively available via the NCEI BAG provider at much higher resolutions (e.g., 50cm).
+A frequent scenario in topobathykit is the overlap between **BlueTopo** (Tier 2, Regional) and **NCEI BAG** (Tier 0, High-Res Truth). BlueTopo is distributed as large geographic mosaic tiles (e.g., ``BH5245GP``) which contain compiled data from dozens of underlying surveys. Many of the newer sub-surveys inside these mosaics are also natively available via the NCEI BAG provider at much higher resolutions (e.g., 50cm).
 
-Because BlueTopo macro-tiles aggregate both sparse historic data (which has no BAG equivalent) and modern high-resolution arrays, TopoBathySim **intentionally fetches both layers without attempting to pre-filter redundancies at the network level**.
+Because BlueTopo macro-tiles aggregate both sparse historic data (which has no BAG equivalent) and modern high-resolution arrays, topobathykit **intentionally fetches both layers without attempting to pre-filter redundancies at the network level**.
 
 The engine gracefully resolves this redundancy automatically in memory:
 
@@ -109,7 +109,7 @@ This top-to-bottom geographic override guarantees that older, non-BAG surveys in
 NoData Sentinel Evidence Matrix
 -------------------------------
 
-TopoBathySim treats NoData handling as a provider-specific ingest concern and a
+topobathykit treats NoData handling as a provider-specific ingest concern and a
 merge-boundary safety concern. The table below records currently implemented,
 evidence-backed handling:
 
@@ -152,5 +152,5 @@ evidence-backed handling:
 
 Implementation Note:
 
-Shared sanitization is centralized in ``topobathysim.providers.base.sanitize_elevation_nodata``.
+Shared sanitization is centralized in ``topobathykit.providers.base.sanitize_elevation_nodata``.
 This keeps provider behavior consistent while still allowing provider-specific sentinel overrides.

@@ -1,6 +1,6 @@
 from typing import cast
 
-from topobathysim.utils.cache import MemoizeWithLocks, concurrent_lru_cache
+from topobathykit.utils.cache import MemoizeWithLocks, concurrent_lru_cache
 
 
 class MockResource:

@@ -1,7 +1,7 @@
 Visual Gallery
 ==============
 
-This gallery showcases the visual output of the TopoBathySim fusion process, provenance tracking, and debugging tools. Note that there are two primary ways to visualize fused data: the **3D DEM Viewer** for arbitrary resolution exploration and the **2D Map Tile Viewer** for standard web-map navigation.
+This gallery showcases the visual output of the topobathykit fusion process, provenance tracking, and debugging tools. Note that there are two primary ways to visualize fused data: the **3D DEM Viewer** for arbitrary resolution exploration and the **2D Map Tile Viewer** for standard web-map navigation.
 
 .. contents::
    :local:
@@ -41,7 +41,7 @@ The standard Map Tile Viewer provides a familiar 2D interface for navigating fus
 Data Provenance & Source Mapping
 --------------------------------
 
-One of TopoBathySim's core strengths is "Provenance-First" fusion. We track exactly which data source contributed to each pixel in the final grid.
+One of topobathykit's core strengths is "Provenance-First" fusion. We track exactly which data source contributed to each pixel in the final grid.
 
 .. figure:: _static/topobathy-sources.png
    :alt: Data Sources Map

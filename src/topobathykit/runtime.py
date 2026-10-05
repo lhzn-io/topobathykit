@@ -1,5 +1,5 @@
 """
-Core Runtime for TopoBathySim.
+Core Runtime for topobathykit.
 
 This module executes fusion policies to generate topobathymetric datasets.
 """
@@ -22,15 +22,15 @@ import xarray as xr
 from affine import Affine
 from pyproj import CRS, Transformer
 
-from topobathysim.policy.loader import (
+from topobathykit.policy.loader import (
     generate_provider_legend,
     hash_policy,
     load_policy,
     load_policy_from_str,
 )
-from topobathysim.policy.schema import OperatorType
-from topobathysim.providers.base import ProviderNoDataError, despike_median_deviation
-from topobathysim.providers.registry import registry
+from topobathykit.policy.schema import OperatorType
+from topobathykit.providers.base import ProviderNoDataError, despike_median_deviation
+from topobathykit.providers.registry import registry
 
 from .config import get_cache_root
 from .operators.blend import metric_feather, overwrite

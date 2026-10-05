@@ -1,5 +1,5 @@
-from topobathysim.policy.loader import hash_policy
-from topobathysim.runtime import get_fused_cache_info
+from topobathykit.policy.loader import hash_policy
+from topobathykit.runtime import get_fused_cache_info
 
 
 def test_hash_policy_stability() -> None:

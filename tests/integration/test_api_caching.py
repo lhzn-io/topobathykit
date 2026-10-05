@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from topobathyserve.main import app, get_policy_path
 
-from topobathysim.policy.schema import CompositionStep, FusionPolicy, VariableStrategy
+from topobathykit.policy.schema import CompositionStep, FusionPolicy, VariableStrategy
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ def test_policy_path(clean_cache: Path) -> Path:
         # Patch the environment cache to point here during test explicitly
         import os
 
-        os.environ["TOPOBATHYSIM_CACHE_DIR"] = str(clean_cache)
+        os.environ["TOPOBATHYKIT_CACHE_DIR"] = str(clean_cache)
         f.write(policy.model_dump_json())  # type: ignore
     return policy_path
 

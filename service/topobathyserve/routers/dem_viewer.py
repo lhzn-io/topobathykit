@@ -11,8 +11,8 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from topobathyserve.models import DEMQualityReport
 
-from topobathysim.config import get_cache_root
-from topobathysim.quality import calculate_spatial_stats
+from topobathykit.config import get_cache_root
+from topobathykit.quality import calculate_spatial_stats
 
 logger = logging.getLogger(__name__)
 

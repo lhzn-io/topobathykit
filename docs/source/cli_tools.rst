@@ -1,14 +1,14 @@
 CLI Tools
 =========
 
-TopoBathySim includes a unified command-line utility — ``cache_manager`` — for
+topobathykit includes a unified command-line utility — ``cache_manager`` — for
 inspecting, verifying integrity, and purging cached data.  A separate ``run_server``
 script starts the tile server.
 
 Understanding the Cache Hierarchy
 ----------------------------------
 
-TopoBathySim maintains five cache tiers, ordered from the safest to the most
+topobathykit maintains five cache tiers, ordered from the safest to the most
 expensive to rebuild:
 
 .. list-table:: Cache Tier Inventory
@@ -17,7 +17,7 @@ expensive to rebuild:
 
    * - #
      - Tier
-     - Paths (relative to ``~/.cache/topobathysim/``)
+     - Paths (relative to ``~/.cache/topobathykit/``)
      - Rebuild cost
    * - 1
      - Output tiles & metadata
@@ -46,7 +46,7 @@ expensive to rebuild:
    :widths: 40 60
    :header-rows: 1
 
-   * - File (relative to ``~/.cache/topobathysim/``)
+   * - File (relative to ``~/.cache/topobathykit/``)
      - Stores
    * - ``ncei_bag/discovery_cache.json``
      - bbox → BAG download-URL list (NCEI ArcGIS API)
@@ -93,13 +93,13 @@ Run without arguments to enter the interactive menu:
 
 .. code-block:: bash
 
-   python -m topobathysim.scripts.cache_manager
+   python -m topobathykit.scripts.cache_manager
 
 The menu displays a live status table and loops after each operation::
 
-   TopoBathySim Cache Manager
+   topobathykit Cache Manager
    ==========================
-     Cache root : ~/.cache/topobathysim
+     Cache root : ~/.cache/topobathykit
      Total size : 4.2 GB
 
      #   Tier                            Size    Items
@@ -126,25 +126,25 @@ Non-Interactive Flags
 .. code-block:: bash
 
    # 1. Integrity audit (read-only)
-   python -m topobathysim.scripts.cache_manager --check
+   python -m topobathykit.scripts.cache_manager --check
 
    # 2. Integrity check + delete corrupt files and stale locks
-   python -m topobathysim.scripts.cache_manager --clean
+   python -m topobathykit.scripts.cache_manager --clean
 
    # 3. Purge a specific tier
-   python -m topobathysim.scripts.cache_manager --purge 1
+   python -m topobathykit.scripts.cache_manager --purge 1
 
    # 4. Purge multiple tiers
-   python -m topobathysim.scripts.cache_manager --purge 1 2 4
+   python -m topobathykit.scripts.cache_manager --purge 1 2 4
 
    # 5. Purge all tiers (prompts for tier 5 confirmation unless --yes)
-   python -m topobathysim.scripts.cache_manager --purge all
+   python -m topobathykit.scripts.cache_manager --purge all
 
    # 6. Dry run — preview what would be deleted without deleting
-   python -m topobathysim.scripts.cache_manager --dry-run --purge all
+   python -m topobathykit.scripts.cache_manager --dry-run --purge all
 
    # 7. Skip confirmation prompts (use with care for tier 5)
-   python -m topobathysim.scripts.cache_manager --yes --purge 1 2
+   python -m topobathykit.scripts.cache_manager --yes --purge 1 2
 
 Arguments
 ^^^^^^^^^
@@ -164,27 +164,27 @@ Common Scenarios
 
 .. code-block:: bash
 
-   python -m topobathysim.scripts.cache_manager --purge 1 --yes
+   python -m topobathykit.scripts.cache_manager --purge 1 --yes
 
 **Force re-fusion after updating the policy YAML**
 
 .. code-block:: bash
 
    # Purge fused zarr so next tile request re-runs the fusion pipeline
-   python -m topobathysim.scripts.cache_manager --purge 2 --yes
+   python -m topobathykit.scripts.cache_manager --purge 2 --yes
 
 **NCEI has published new multibeam surveys for your area**
 
 .. code-block:: bash
 
-   python -m topobathysim.scripts.cache_manager --purge 4 --yes
+   python -m topobathykit.scripts.cache_manager --purge 4 --yes
 
 **NOAA has updated BlueTopo tiles (filenames changed with a new date stamp)**
 
 .. code-block:: bash
 
    # Stale tile_url_cache entries will 404; purge tier 4 to force re-discovery
-   python -m topobathysim.scripts.cache_manager --purge 4 --yes
+   python -m topobathykit.scripts.cache_manager --purge 4 --yes
 
 **BlueTopo sidecar RAT_Links returning 404 (stale tile scheme)**
 
@@ -197,29 +197,29 @@ until the scheme is refreshed:
 .. code-block:: bash
 
    # Purge tier 4 — clears the GPKG, sidecars, and .failed sentinels together
-   python -m topobathysim.scripts.cache_manager --purge 4 --yes
+   python -m topobathykit.scripts.cache_manager --purge 4 --yes
 
 **A new NOAA topobathy lidar project was added to the archive**
 
 .. code-block:: bash
 
-   python -m topobathysim.scripts.cache_manager --purge 4 --yes
+   python -m topobathykit.scripts.cache_manager --purge 4 --yes
 
 **Start completely fresh (keep raw source files)**
 
 .. code-block:: bash
 
    # Clears tiers 1–4; raw files are retained so re-rendering is fast
-   python -m topobathysim.scripts.cache_manager --purge 1 2 3 4 --yes
+   python -m topobathykit.scripts.cache_manager --purge 1 2 3 4 --yes
 
 **Check for corrupt or stale files after a crash**
 
 .. code-block:: bash
 
-   python -m topobathysim.scripts.cache_manager --check
+   python -m topobathykit.scripts.cache_manager --check
 
    # If issues are found, run with --clean to delete them
-   python -m topobathysim.scripts.cache_manager --clean
+   python -m topobathykit.scripts.cache_manager --clean
 
 .. note::
 
@@ -238,7 +238,7 @@ To run the tile server for local development or production usage:
 .. code-block:: bash
 
    # Start the server on port 9595 with 8 worker processes
-   micromamba run -n topobathysim python service/run_server.py --host 0.0.0.0 --port 9595 --workers 8
+   micromamba run -n topobathykit python service/run_server.py --host 0.0.0.0 --port 9595 --workers 8
 
 Arguments:
 ^^^^^^^^^^

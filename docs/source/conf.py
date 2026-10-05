@@ -5,7 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath("../../src"))
 
-project = "TopoBathySim"
+project = "topobathykit"
 copyright = "2026, Long Horizon Observatory"
 author = "Daniel Fry"
 release = "0.1.0"

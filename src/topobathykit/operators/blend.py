@@ -1,5 +1,5 @@
 """
-Geospatial blend operators for TopoBathySim.
+Geospatial blend operators for topobathykit.
 
 This module contains functions for mixing and merging elevation datasets,
 specifically handling CRS transformations and metric distance feathering.

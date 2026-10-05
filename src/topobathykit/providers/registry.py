@@ -12,7 +12,7 @@ from .base import Provider
 
 class ProviderRegistry:
     """
-    Singleton registry for TopoBathySim data providers.
+    Singleton registry for topobathykit data providers.
 
     Allows registering provider classes by a string key (e.g., 'gebco', 'bluetopo')
     and retrieving instances of them.
@@ -84,7 +84,7 @@ class ProviderRegistry:
         # Get the package of the registry module
         package_name = __package__
         if not package_name:
-            package_name = "topobathysim.providers"
+            package_name = "topobathykit.providers"
 
         # Iterate over modules in the same directory
         package_dir = Path(__file__).parent

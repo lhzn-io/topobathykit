@@ -55,7 +55,7 @@ class NoaaTopobathyProvider(Provider):
     # means the project list and spatial index are loaded from disk only once per
     # process instead of nine times.
     #
-    # Disk backing files (under ~/.cache/topobathysim/metadata/):
+    # Disk backing files (under ~/.cache/topobathykit/metadata/):
     #   noaa_coastal_lidar.json   - project ID -> folder name mapping (fetched from S3 HTML)
     #   noaa_project_extents.geojson - spatial bbox index (built from project list)
     #
@@ -553,7 +553,7 @@ class NoaaTopobathyProvider(Provider):
         if not xml_path.exists():
             try:
                 logger.info(f"Fetching InPort Metadata: {info_url}")
-                headers = {"User-Agent": "Mozilla/5.0 TopoBathySim/1.0"}
+                headers = {"User-Agent": "Mozilla/5.0 topobathykit/1.0"}
                 r = requests.get(info_url, headers=headers, timeout=10)
                 if r.status_code == 200 and len(r.content) > 100:
                     with open(xml_path, "wb") as f:
@@ -801,7 +801,7 @@ class NoaaTopobathyProvider(Provider):
                     # Fallback if scripts isn't importable as package
                     logger.error(
                         "Could not import build_noaa_index script. Please run "
-                        "'python -m topobathysim.scripts.build_noaa_index' manually."
+                        "'python -m topobathykit.scripts.build_noaa_index' manually."
                     )
                     return
                 except Exception as e:
@@ -1046,7 +1046,7 @@ class NoaaTopobathyProvider(Provider):
         if self._spatial_index is None or self._spatial_index.empty:
             raise RuntimeError(
                 "NOAA Spatial Index is unavailable. "
-                "Please run 'python -m topobathysim.scripts.build_noaa_index' to generate it."
+                "Please run 'python -m topobathykit.scripts.build_noaa_index' to generate it."
             )
 
         return []

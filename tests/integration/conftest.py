@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from topobathysim.config import get_cache_root
+from topobathykit.config import get_cache_root
 
 
 @pytest.fixture(scope="session")

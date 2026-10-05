@@ -16,9 +16,9 @@ load_dotenv()
 if "OPEN_TOPOGRAPHY_API_KEY" in os.environ:
     os.environ["OPENTOPOGRAPHY_API_KEY"] = os.environ["OPEN_TOPOGRAPHY_API_KEY"]
 
-from topobathysim.fusion import FusionEngine  # noqa: E402
-from topobathysim.providers.usgs_lidar import UsgsLidarProvider  # noqa: E402
-from topobathysim.runtime import run  # noqa: E402
+from topobathykit.fusion import FusionEngine  # noqa: E402
+from topobathykit.providers.usgs_lidar import UsgsLidarProvider  # noqa: E402
+from topobathykit.runtime import run  # noqa: E402
 
 # Found via scan_laz.py
 LIDAR_URL = "s3://noaa-nos-coastal-lidar-pds/laz/geoid18/4938/20140403_usgs_ny_li_18TXL060240.copc.laz"

@@ -5,7 +5,7 @@ from unittest.mock import patch
 import numpy as np
 import xarray as xr
 
-from topobathysim.providers.noaa_bluetopo import NoaaBlueTopoProvider
+from topobathykit.providers.noaa_bluetopo import NoaaBlueTopoProvider
 
 
 def _make_tile_dataset(
@@ -194,7 +194,7 @@ def test_fetch_layer_single_projected_tile_reprojects_to_requested_crs(tmp_path:
 def test_fetch_layer_all_tiles_failing_raises_fetch_error(tmp_path: Path) -> None:
     import pytest
 
-    from topobathysim.providers.base import ProviderFetchError
+    from topobathykit.providers.base import ProviderFetchError
 
     provider = _new_provider(tmp_path)
 
@@ -207,7 +207,7 @@ def test_fetch_layer_all_tiles_failing_raises_fetch_error(tmp_path: Path) -> Non
 
 
 def test_fetch_layer_reports_partial_result(tmp_path: Path) -> None:
-    from topobathysim.providers.base import ProviderFetchError
+    from topobathykit.providers.base import ProviderFetchError
 
     provider = _new_provider(tmp_path)
     ds_ok = _make_tile_dataset(-72.0, -71.9, 41.0, 41.1, "EPSG:4326", value=-4.0, src_id=1)
@@ -248,8 +248,8 @@ def test_load_tile_vdatum_outage_raises_fetch_error(tmp_path: Path) -> None:
     import pytest
     import rioxarray
 
-    from topobathysim.providers.base import ProviderFetchError
-    from topobathysim.vdatum import VDatumUnavailableError
+    from topobathykit.providers.base import ProviderFetchError
+    from topobathykit.vdatum import VDatumUnavailableError
 
     provider = _new_provider(tmp_path)
 
@@ -271,7 +271,7 @@ def test_load_tile_vdatum_outage_raises_fetch_error(tmp_path: Path) -> None:
 def test_load_tile_without_vdatum_coverage_drops_tile(tmp_path: Path) -> None:
     import rioxarray
 
-    from topobathysim.vdatum import VDatumNoDataError
+    from topobathykit.vdatum import VDatumNoDataError
 
     provider = _new_provider(tmp_path)
 

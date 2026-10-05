@@ -7,7 +7,7 @@ import rioxarray
 import xarray as xr
 from rasterio.transform import from_origin
 
-from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+from topobathykit.providers.noaa_topobathy import NoaaTopobathyProvider
 
 
 @pytest.fixture
@@ -61,7 +61,7 @@ def test_noaa_clip_logic(mock_tif: object) -> None:
         patch.object(prov, "find_projects_by_box", return_value=[pid]),
         patch.object(prov, "resolve_tiles_in_bbox", return_value=["test_tile_utm.tif"]),
         patch(
-            "topobathysim.providers.noaa_topobathy.rioxarray.open_rasterio",
+            "topobathykit.providers.noaa_topobathy.rioxarray.open_rasterio",
             side_effect=lambda *a, **kw: orig_open(mock_tif, masked=True),
         ),
         patch("fcntl.flock", return_value=None),

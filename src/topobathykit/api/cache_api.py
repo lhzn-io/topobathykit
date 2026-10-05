@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from topobathysim.api.models import (
+from topobathykit.api.models import (
     CacheDetail,
     CacheSummary,
     CacheTierInfo,
@@ -33,10 +33,10 @@ from topobathysim.api.models import (
 # and mypy might complain about missing stubs or side effects.
 try:
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-        import topobathysim.scripts.cache_manager as cm
+        import topobathykit.scripts.cache_manager as cm
 except ImportError:
     # Fallback or error if script is missing
-    raise ImportError("Could not import topobathysim.scripts.cache_manager") from None
+    raise ImportError("Could not import topobathykit.scripts.cache_manager") from None
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +227,7 @@ def get_cache_detail(cache_bust: bool = True) -> CacheDetail:
     )
 
     # Map Tier 2
-    from topobathysim.api.models import PolicyHashGroup
+    from topobathykit.api.models import PolicyHashGroup
 
     policies_mapped = []
 

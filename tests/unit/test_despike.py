@@ -18,9 +18,9 @@ import xarray as xr
 import yaml
 from affine import Affine
 
-import topobathysim.runtime as runtime
-from topobathysim.providers.base import Provider, despike_median_deviation
-from topobathysim.providers.registry import registry
+import topobathykit.runtime as runtime
+from topobathykit.providers.base import Provider, despike_median_deviation
+from topobathykit.providers.registry import registry
 
 
 def _da(values: np.ndarray) -> xr.DataArray:
@@ -125,7 +125,7 @@ class _SpikedSeabed(Provider):
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TOPOBATHYSIM_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("TOPOBATHYKIT_CACHE_DIR", str(tmp_path / "cache"))
     registry.register("it_spiked", _SpikedSeabed)
 
 

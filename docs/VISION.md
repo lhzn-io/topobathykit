@@ -1,14 +1,14 @@
 # Vision
 
-TopoBathySim is a policy-driven **topobathymetric fusion runtime**: a Python library (and optional service) for turning heterogeneous elevation sources into **seamless, simulation- and analysis-ready grids** with **per-pixel provenance**.
+topobathykit is a policy-driven **topobathymetric fusion runtime**: a Python library (and optional service) for turning heterogeneous elevation sources into **seamless, simulation- and analysis-ready grids** with **per-pixel provenance**.
 
 ## Mission
 
 Make it straightforward to build *trustworthy digital terrain* anywhere on Earth by combining global basemaps with local high-resolution surveys—while keeping assumptions explicit and outputs reproducible.
 
-## What TopoBathySim is
+## What topobathykit is
 
-TopoBathySim focuses on the layer between *raw geospatial infrastructure* and *downstream modeling/simulation*.
+topobathykit focuses on the layer between *raw geospatial infrastructure* and *downstream modeling/simulation*.
 
 Concretely, it provides:
 
@@ -18,9 +18,9 @@ Concretely, it provides:
 - **Provenance-first outputs** (`xarray.Dataset`) that include fused values and source masks for debugging, QA, and downstream trust.
 - An optional **microservice** that serves the same fused products over HTTP for real-time clients (Unity/Unreal/Omniverse, robotics stacks, web viewers).
 
-## What TopoBathySim is not
+## What topobathykit is not
 
-TopoBathySim is intentionally not:
+topobathykit is intentionally not:
 
 - A hosted dataset, or an “authoritative” replacement for hydrographic offices.
 - A single “one true fusion algorithm.” Fusion strategies are **use-case dependent** and belong in policies.
@@ -29,13 +29,13 @@ TopoBathySim is intentionally not:
 
 ## Where we fit in the open topo/bathy ecosystem
 
-TopoBathySim complements existing tools and workflows:
+topobathykit complements existing tools and workflows:
 
 - **CUDEM** and similar pipelines are excellent for systematic DEM production and gridding workflows.
 - **GDAL / PDAL / xarray / rioxarray** provide foundational geospatial I/O and processing primitives.
 - **bmi-topography** provides standardized access patterns to certain DEM products.
 
-TopoBathySim’s niche is the **runtime + policy layer**:
+topobathykit’s niche is the **runtime + policy layer**:
 
 - codifying *“what should win where”* (trusted overwrite vs transition blending),
 - making results reproducible and inspectable (provenance masks),

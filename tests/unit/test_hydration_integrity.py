@@ -17,9 +17,9 @@ import xarray as xr
 import yaml
 from affine import Affine
 
-import topobathysim.runtime as runtime
-from topobathysim.providers.base import Provider, ProviderFetchError, ProviderNoDataError
-from topobathysim.providers.registry import registry
+import topobathykit.runtime as runtime
+from topobathykit.providers.base import Provider, ProviderFetchError, ProviderNoDataError
+from topobathykit.providers.registry import registry
 
 # A bbox strictly inside one standard 0.05 degree grid cell, and that cell. At 500 m
 # the cell canvas is about 13 x 13 pixels.
@@ -135,7 +135,7 @@ class _DaemonProcess:
 
 @pytest.fixture(autouse=True)
 def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TOPOBATHYSIM_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("TOPOBATHYKIT_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.delenv("TOPOBATHY_MAX_CELL_NAN_FRACTION", raising=False)
     for name, cls in _PROVIDERS.items():
         registry.register(name, cls)
@@ -266,7 +266,7 @@ TB_BBOX = (-73.52, 40.88, -73.43, 40.97)
 
 @pytest.fixture
 def topobathy(tmp_path: Path) -> Any:
-    from topobathysim.providers.noaa_topobathy import NoaaTopobathyProvider
+    from topobathykit.providers.noaa_topobathy import NoaaTopobathyProvider
 
     NoaaTopobathyProvider._singleton = None
     NoaaTopobathyProvider._cls_spatial_index = None

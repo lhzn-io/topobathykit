@@ -2,7 +2,7 @@
 Persistent job state for hydration tasks.
 
 Each job writes its state to a JSON file at:
-    ~/.cache/topobathysim/hydration_jobs/{job_id}.json
+    ~/.cache/topobathykit/hydration_jobs/{job_id}.json
 
 Design constraints:
 - Single writer (the hydration subprocess) per job file.
@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from topobathysim.config import get_cache_root
+from topobathykit.config import get_cache_root
 
 logger = logging.getLogger(__name__)
 

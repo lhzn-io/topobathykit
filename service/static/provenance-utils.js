@@ -1,7 +1,7 @@
 /**
  * provenance-utils.js — Shared DEM provenance visualization utilities.
  *
- * Used by both topobathysim/dem-viewer.html and coastal-sim/hydro_viewer.html
+ * Used by both topobathykit/dem-viewer.html and coastal-sim/hydro_viewer.html
  * to render per-pixel data source attribution on Three.js terrain meshes.
  *
  * Usage:

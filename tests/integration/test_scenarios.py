@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from topobathysim.runtime import run
+from topobathykit.runtime import run
 
 # Create a custom logger for this test module to ensure we see our own debugs
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ logger.setLevel(logging.DEBUG)
 def silence_chatty_libraries() -> None:
     """
     Configures logging to silence noisy third-party libraries while
-    keeping 'topobathysim' and local tests verbose.
+    keeping 'topobathykit' and local tests verbose.
     """
     # List of libraries to silence (set to WARNING or higher)
     chatty_loggers = [
@@ -40,8 +40,8 @@ def silence_chatty_libraries() -> None:
     for log_name in chatty_loggers:
         logging.getLogger(log_name).setLevel(logging.WARNING)
 
-    # Ensure topobathysim is loud and clear
-    logging.getLogger("topobathysim").setLevel(logging.DEBUG)
+    # Ensure topobathykit is loud and clear
+    logging.getLogger("topobathykit").setLevel(logging.DEBUG)
 
 
 def xyz_to_bounds(z: int, x: int, y: int) -> tuple[float, float, float, float]:
@@ -81,7 +81,7 @@ def test_real_world_tile_scenarios(
     """
     import os
 
-    os.environ["TOPOBATHYSIM_CACHE_DIR"] = str(persistent_cache_dir)
+    os.environ["TOPOBATHYKIT_CACHE_DIR"] = str(persistent_cache_dir)
 
     west, south, east, north = xyz_to_bounds(z, x, y)
     logger.info(f"Testing Tile Z={z} X={x} Y={y} -> BBox: {west:.4f}, {south:.4f}, {east:.4f}, {north:.4f}")

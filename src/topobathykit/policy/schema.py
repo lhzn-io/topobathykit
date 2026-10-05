@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from topobathysim.providers.registry import registry
+from topobathykit.providers.registry import registry
 
 """
 Policy Schema Definitions.

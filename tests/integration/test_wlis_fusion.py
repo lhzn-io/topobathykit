@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from topobathysim.runtime import run
+from topobathykit.runtime import run
 
 
 @pytest.mark.integration
