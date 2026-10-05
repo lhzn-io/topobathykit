@@ -43,8 +43,7 @@ dependencies = [
   "httpx",
   "planetary-computer",
   "pystac-client",
-  # Point cloud
-  "pdal",
+  # Point cloud (PDAL itself is the optional "lidar" extra: it needs the PDAL C++ library)
   "laspy",
   "lazrs",
   "h5py",
@@ -62,6 +61,11 @@ dependencies = [
   "uvicorn",
   "fastapi",
 ]
+
+[project.optional-dependencies]
+# USGS 3DEP lidar point clouds (providers/usgs_lidar.py). The pdal binding builds against the
+# PDAL C++ library, so install that first (conda-forge: pdal python-pdal).
+lidar = ["pdal"]
 
 [tool.hatch.build.targets.wheel]
 # topobathysim is a one-release alias for the package's former name.
