@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "topobathykit"
-version = "0.1.0"
+version = "0.1.0.post1"
 description = "Policy-driven topobathymetric fusion: fuses overlapping elevation sources into seamless grids with per-pixel provenance."
 readme = "README.md"
 requires-python = ">=3.12"
