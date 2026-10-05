@@ -68,7 +68,7 @@ dependencies = [
 packages = ["src/topobathykit", "src/topobathysim"]
 
 [project.urls]
-Documentation = "https://topobathysim.docs.lhzn.io"
+Documentation = "https://topobathykit.docs.lhzn.io"
 Issues = "https://github.com/lhzn-io/topobathykit/issues"
 Source = "https://github.com/lhzn-io/topobathykit"
 
