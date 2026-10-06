@@ -26,7 +26,7 @@ def mock_provider(tmp_path: Path) -> NoaaTopobathyProvider:
     # Mock project list to avoid network calls
     # provider._projects points to NoaaTopobathyProvider._cls_projects
     provider._projects["9999"] = "Test Project"
-    provider._projects["10274"] = "LIS Project"
+    provider._projects["10274"] = "Long Island Sound Project"
     provider._projects_metadata_urls = {}
 
     return provider
