@@ -209,6 +209,8 @@ function elevationColor(z, zMin, zMax) {
 }
 
 // ── Build Terrain Geometry ──
+const SCENE_SCALE = 0.01; // scene units per metre
+
 function buildTerrain(buffer, meta, decimation, zExag, zMin, zMax) {
     const { width, height, bounds } = meta;
     const [lonMin, latMin, lonMax, latMax] = bounds;
@@ -219,7 +221,7 @@ function buildTerrain(buffer, meta, decimation, zExag, zMin, zMax) {
     const latCenter = (latMin + latMax) / 2;
     const cosLat = Math.cos(latCenter * Math.PI / 180);
     const degToM = 111320;
-    const sceneScale = 0.01;
+    const sceneScale = SCENE_SCALE;
 
     const positions = new Float32Array(nx * ny * 3);
     const colors = new Float32Array(nx * ny * 3);
@@ -277,7 +279,12 @@ function buildTerrain(buffer, meta, decimation, zExag, zMin, zMax) {
     return geometry;
 }
 
-function rebuildMesh() {
+// Exaggeration the current mesh was built with, for anchoring the camera.
+let meshExag = null;
+
+// frameCamera re-frames the view on the terrain; only a newly loaded dataset
+// asks for it, so slider changes keep the current camera.
+function rebuildMesh({ frameCamera = false } = {}) {
     if (!demData) return;
     const zExag = parseFloat(document.getElementById('z-exag').value);
     const zMin = parseFloat(document.getElementById('z-min').value);
@@ -285,6 +292,17 @@ function rebuildMesh() {
     const decimation = parseInt(document.getElementById('decimation').value);
     document.getElementById('exag-val').textContent = zExag + 'x';
     document.getElementById('dec-val').textContent = decimation;
+
+    // Height of the terrain point at the centre of the view, taken from the mesh
+    // before it is rebuilt. Looking past the terrain, fall back to the
+    // mid-height of the valid elevations (the bounding box would include NaN
+    // cells, which sit at 0).
+    let anchorY = null;
+    if (!frameCamera && solidMesh && meshExag && meshExag !== zExag) {
+        raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+        const hit = raycaster.intersectObject(solidMesh)[0];
+        anchorY = hit ? hit.point.y : demData.zMid * meshExag * SCENE_SCALE;
+    }
 
     if (solidMesh) { scene.remove(solidMesh); solidMesh.geometry.dispose(); solidMesh = null; }
     if (wireMesh) { scene.remove(wireMesh); wireMesh.geometry.dispose(); wireMesh = null; }
@@ -304,6 +322,21 @@ function rebuildMesh() {
 
     applyRenderMode();
 
+    const prevExag = meshExag;
+    meshExag = zExag;
+    if (!frameCamera) {
+        // Scene height is elevation * exaggeration, so the anchor point moves
+        // to anchorY * ratio. Shifting camera and target by the same offset
+        // keeps it at the same place on screen, with the view direction and
+        // distance unchanged.
+        if (anchorY !== null) {
+            const dy = anchorY * (zExag / prevExag - 1);
+            controls.target.y += dy;
+            camera.position.y += dy;
+            controls.update();
+        }
+        return;
+    }
     const box = new THREE.Box3().setFromObject(solidMesh);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
@@ -450,6 +483,7 @@ window.loadDataset = async function() {
             if (buffer[i] < minZ) minZ = buffer[i];
             if (buffer[i] > maxZ) maxZ = buffer[i];
         }
+        demData.zMid = validCount ? (minZ + maxZ) / 2 : 0;
 
         const lodSuffix = meta.scale < 0.99
             ? ` (LoD ${(meta.scale * 100).toFixed(0)}%, full: ${meta.full_width}x${meta.full_height})`
@@ -465,7 +499,7 @@ window.loadDataset = async function() {
         document.getElementById('error-msg').style.display = 'none';
         loadMsg.textContent = 'Building mesh...';
         await new Promise(r => setTimeout(r, 50));
-        rebuildMesh();
+        rebuildMesh({ frameCamera: true });
 
         // Fetch provenance data (non-blocking)
         loadMsg.textContent = 'Loading provenance...';
@@ -498,9 +532,9 @@ window.loadDataset = async function() {
 
 // ── UI Bindings ──
 document.getElementById('z-exag').addEventListener('input', () => { rebuildMesh(); window.updateQualityScale(); });
-document.getElementById('z-min').addEventListener('change', rebuildMesh);
-document.getElementById('z-max').addEventListener('change', rebuildMesh);
-document.getElementById('decimation').addEventListener('input', rebuildMesh);
+document.getElementById('z-min').addEventListener('change', () => rebuildMesh());
+document.getElementById('z-max').addEventListener('change', () => rebuildMesh());
+document.getElementById('decimation').addEventListener('input', () => rebuildMesh());
 
 // ── Mouse Picking ──
 canvas.addEventListener('mousemove', (event) => {
