@@ -32,6 +32,7 @@ from .base import (
     ProviderNoDataError,
     interpolate_small_gaps,
     sanitize_elevation_nodata,
+    source_uid,
 )
 from .registry import registry
 
@@ -496,8 +497,6 @@ class NoaaBlueTopoProvider(Provider):
                 fetch_errors.append(f"{tid}: no elevation variable")
                 continue
             if ds is not None:
-                import hashlib
-
                 import numpy as np
 
                 da_elev = sanitize_elevation_nodata(ds["elevation"], abs_valid_limit=100000.0)
@@ -537,8 +536,7 @@ class NoaaBlueTopoProvider(Provider):
                                 continue
 
                         name = f"BlueTopo: {survey_id}" if survey_id else f"BlueTopo: {tid}_{pval_int}"
-                        digest = hashlib.md5(name.encode()).hexdigest()
-                        project_uid = int(digest, 16) % 100000 + 50000
+                        project_uid = source_uid("noaa_bluetopo", name)
 
                         provenance_dict[project_uid] = {
                             "name": name,
@@ -549,8 +547,7 @@ class NoaaBlueTopoProvider(Provider):
 
                     p_source = translated_src.astype(np.uint32)
                 else:
-                    digest = hashlib.md5(tid.encode()).hexdigest()
-                    project_uid = int(digest, 16) % 100000 + 50000
+                    project_uid = source_uid("noaa_bluetopo", tid)
                     mid_lat = (south + north) / 2
                     mid_lon = (west + east) / 2
                     survey_id = self.get_source_survey_id(mid_lat, mid_lon)

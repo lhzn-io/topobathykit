@@ -25,7 +25,7 @@ from ..config import get_cache_root
 from ..runtime import should_consolidate
 from ..utils.cache import concurrent_lru_cache
 from ..vdatum import VDatumNoDataError, VDatumResolver
-from .base import Provider, ProviderNoDataError, interpolate_small_gaps, sanitize_elevation_nodata
+from .base import Provider, ProviderNoDataError, interpolate_small_gaps, sanitize_elevation_nodata, source_uid
 from .registry import registry
 
 logger = logging.getLogger(__name__)
@@ -1210,11 +1210,10 @@ class BAGProvider(Provider):
                         da_work = clean_data_deviation(da_work, threshold=threshold)
 
                 # --- Provenance ---
-                import hashlib
                 import re
 
                 filename = url.split("/")[-1].replace(".bag", "")
-                project_uid = int(hashlib.md5(filename.encode()).hexdigest(), 16) % 100000 + 40000
+                project_uid = source_uid("ncei_bag", filename)
 
                 res_str = "Unknown"
                 m_cm = re.search(r"[._-](\d+(?:\.\d+)?)cm[._-]", filename, re.IGNORECASE)

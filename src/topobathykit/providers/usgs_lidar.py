@@ -24,7 +24,7 @@ from ..config import get_cache_root
 from ..manifest import OfflineManifest
 from ..runtime import should_consolidate
 from ..utils.cache import concurrent_lru_cache
-from .base import Provider, ProviderNoDataError
+from .base import Provider, ProviderNoDataError, source_uid
 from .registry import registry
 
 logger = logging.getLogger(__name__)
@@ -385,9 +385,7 @@ class UsgsLidarProvider(Provider):
 
                 # Inject source_id if the cache only contains elevation
                 if "source_id" not in ds:
-                    import hashlib
-
-                    project_uid = int(hashlib.md5(local_path.name.encode()).hexdigest(), 16) % 100000 + 70000
+                    project_uid = source_uid("usgs_lidar", local_path.name)
                     p_source = xr.where(ds["elevation"].notnull(), project_uid, 0).astype(np.uint32)
                     p_source.name = "source_id"
                     p_source.rio.write_nodata(0, inplace=True)
@@ -517,9 +515,8 @@ class UsgsLidarProvider(Provider):
                 da = da.rio.clip_box(*bounds, crs="EPSG:4326", allow_one_dimensional_raster=True)
 
             # Create provenance Dataset
-            import hashlib
 
-            project_uid = int(hashlib.md5(local_path.name.encode()).hexdigest(), 16) % 100000 + 70000
+            project_uid = source_uid("usgs_lidar", local_path.name)
 
             p_source = xr.where(da.notnull(), project_uid, 0).astype(np.uint32)
             p_source.name = "source_id"
@@ -732,7 +729,7 @@ class UsgsLidarProvider(Provider):
             Path(output_filename).unlink(missing_ok=True)
 
         # Build provenance Dataset
-        project_uid = int(hashlib.md5(href.encode()).hexdigest(), 16) % 100000 + 70000
+        project_uid = source_uid("usgs_lidar", href)
         p_source = xr.where(da.notnull(), project_uid, 0).astype(np.uint32)
         p_source.name = "source_id"
         p_source.rio.write_nodata(0, inplace=True)

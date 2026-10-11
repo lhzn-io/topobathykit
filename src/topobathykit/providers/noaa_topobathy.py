@@ -18,7 +18,7 @@ from shapely.geometry import box
 from ..config import get_cache_root
 from ..runtime import should_consolidate
 from ..vdatum import VDatumNoDataError, VDatumResolver
-from .base import Provider, ProviderFetchError, ProviderNoDataError, sanitize_elevation_nodata
+from .base import Provider, ProviderFetchError, ProviderNoDataError, sanitize_elevation_nodata, source_uid
 from .registry import registry
 
 logger = logging.getLogger(__name__)
@@ -253,11 +253,9 @@ class NoaaTopobathyProvider(Provider):
 
                         # Extract Provenance info
                         try:
-                            project_uid = int(pid) + 10000
+                            project_uid = source_uid("noaa_topobathy", int(pid))
                         except ValueError:
-                            import hashlib
-
-                            project_uid = int(hashlib.md5(pid.encode()).hexdigest(), 16) % 100000 + 10000
+                            project_uid = source_uid("noaa_topobathy", pid)
 
                         project_name = self._projects.get(pid, f"Project {pid}")
 

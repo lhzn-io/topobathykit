@@ -1,4 +1,5 @@
 import fnmatch
+import hashlib
 import logging
 import re
 from abc import ABC, abstractmethod
@@ -152,6 +153,38 @@ def despike_median_deviation(
         return da, 0
     cleaned = np.where(spikes, np.nan, da.values)
     return cast(xr.DataArray, da.copy(data=cleaned)), n
+
+
+# Per-pixel source ids. Each provider owns a disjoint block of SOURCE_ID_BLOCK
+# ids, so an id identifies its provider even before provenance_dict is
+# consulted. Ids below SOURCE_ID_BLOCK are reserved for policy legend ids and
+# GEBCO type ids. The largest id stays below 2**24, so it survives a round
+# trip through float32.
+SOURCE_ID_BLOCK = 1_000_000
+SOURCE_ID_BLOCKS: dict[str, int] = {
+    "noaa_topobathy": 1,
+    "ncei_cudem": 3,
+    "ncei_bag": 4,
+    "noaa_bluetopo": 5,
+    "usgs_3dep": 6,
+    "usgs_lidar": 7,
+    "copernicus_dsm": 8,
+    "nasadem": 9,
+}
+
+
+def source_uid(provider: str, key: str | int) -> int:
+    """Return the per-pixel source id for one survey, project or asset of a provider.
+
+    An integer ``key`` below SOURCE_ID_BLOCK (e.g. a NOAA project id) is used
+    as the offset directly, so the id stays readable; any other key is hashed
+    into the block.
+    """
+    base = SOURCE_ID_BLOCKS[provider] * SOURCE_ID_BLOCK
+    if isinstance(key, int) and 0 <= key < SOURCE_ID_BLOCK:
+        return base + key
+    digest = hashlib.md5(str(key).encode()).hexdigest()
+    return base + int(digest, 16) % SOURCE_ID_BLOCK
 
 
 def matches_pattern(name: str, patterns: list[str]) -> bool:

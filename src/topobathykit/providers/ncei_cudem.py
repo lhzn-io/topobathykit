@@ -23,7 +23,7 @@ from ..config import get_cache_root
 from ..quality import QualityClass
 from ..runtime import should_consolidate
 from ..vdatum import VDatumResolver
-from .base import Provider, ProviderNoDataError, sanitize_elevation_nodata
+from .base import Provider, ProviderNoDataError, sanitize_elevation_nodata, source_uid
 from .registry import registry
 
 logger = logging.getLogger(__name__)
@@ -110,10 +110,8 @@ class CUDEMProvider(Provider):
                 else:
                     continue
 
-                import hashlib
-
                 filename = url.split("/")[-1].replace(".tif", "").replace(".tiff", "")
-                project_uid = int(hashlib.md5(filename.encode()).hexdigest(), 16) % 100000 + 30000
+                project_uid = source_uid("ncei_cudem", filename)
                 provenance_dict[project_uid] = {
                     "name": filename,
                     "provider": "ncei_cudem",

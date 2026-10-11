@@ -90,11 +90,21 @@ Each ``fetch_layer()`` call returns an ``xr.Dataset`` containing two arrays:
 
 - ``elevation`` — float32 depth/height values
 - ``source_id`` — uint32 pixel map where each value identifies the contributing
-  survey or sub-tile (provider-assigned IDs for BAG/BlueTopo; hash-derived IDs
-  for other providers)
+  survey or sub-tile, built by ``providers.base.source_uid``
 
 The dataset's ``attrs["provenance_dict"]`` maps each ``source_id`` integer to
 a ``{"name": "...", "provider": "..."}`` dict.
+
+Each provider owns a disjoint block of one million ids
+(``SOURCE_ID_BLOCKS`` in ``providers/base.py``): ``noaa_topobathy`` 1,
+``ncei_cudem`` 3, ``ncei_bag`` 4, ``noaa_bluetopo`` 5, ``usgs_3dep`` 6,
+``usgs_lidar`` 7, ``copernicus_dsm`` 8, ``nasadem`` 9. A NOAA topobathy
+project id is stored as ``1_000_000 + project_id``; every other key is hashed
+into its provider's block. Ids below one million are policy legend ids
+(``generate_provider_legend``) and GEBCO type ids. Cells hydrated before this
+scheme carry ids in overlapping ranges between 10000 and 169999; their
+``provenance_dict`` still resolves them, but the id alone does not identify
+the provider.
 
 **Runtime → Fused Dataset**
 

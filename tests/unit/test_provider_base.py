@@ -4,7 +4,29 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from topobathykit.providers.base import Provider, sanitize_elevation_nodata
+from topobathykit.providers.base import (
+    SOURCE_ID_BLOCK,
+    SOURCE_ID_BLOCKS,
+    Provider,
+    sanitize_elevation_nodata,
+    source_uid,
+)
+
+
+def test_source_uid_blocks_are_disjoint_and_float32_exact() -> None:
+    """Ids from different providers can never collide and survive float32."""
+    assert len(set(SOURCE_ID_BLOCKS.values())) == len(SOURCE_ID_BLOCKS)
+    for provider, block in SOURCE_ID_BLOCKS.items():
+        for key in ("USGS_13_n41w074.tif", "BlueTopo: H12345", 10042, 999_999):
+            uid = source_uid(provider, key)
+            assert uid // SOURCE_ID_BLOCK == block
+            assert int(np.float32(uid)) == uid
+
+
+def test_source_uid_keeps_numeric_project_ids_readable() -> None:
+    assert source_uid("noaa_topobathy", 8483) == SOURCE_ID_BLOCK + 8483
+    assert source_uid("noaa_topobathy", "8483") != SOURCE_ID_BLOCK + 8483  # strings are hashed
+    assert source_uid("usgs_3dep", "a.tif") == source_uid("usgs_3dep", "a.tif")
 
 
 class DummyProvider(Provider):

@@ -20,7 +20,7 @@ from rioxarray.merge import merge_arrays
 
 from ..config import get_cache_root
 from ..manifest import OfflineManifest
-from .base import Provider, ProviderNoDataError, sanitize_elevation_nodata
+from .base import Provider, ProviderNoDataError, sanitize_elevation_nodata, source_uid
 from .registry import registry
 
 logger = logging.getLogger(__name__)
@@ -426,14 +426,13 @@ class CopernicusDsmProvider(Provider):
 
             # 3. Create Provenance and merge as Dataset
             provenance_dict = {}
-            import hashlib
 
             import numpy as np
 
             p_das = []
             for item_idx, da in enumerate(das):
                 href = items_found[item_idx].get("href", f"unknown_stac_asset_{item_idx}")
-                project_uid = int(hashlib.md5(href.encode()).hexdigest(), 16) % 100000 + 60000
+                project_uid = source_uid("copernicus_dsm", href)
 
                 # Try to get a clean name
                 asset_name = Path(href.split("?")[0]).name
