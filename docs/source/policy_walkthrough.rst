@@ -23,11 +23,11 @@ This guide walks through two real-world Fusion Policies: a simple regional overl
         steps:
           # 1. Base Layer (Global)
           - provider: "gebco_2025"
-            operator: "overwrite"
+            operation: "overwrite"
 
           # 2. Local Overlay (Feathered)
           - provider: "jcu_gbr100"
-            operator: "metric_feather"
+            operation: "metric_feather"
             blend_distance: 500.0
 
 **Outcome**:
@@ -63,29 +63,29 @@ The output is a seamless grid where GBR100 data dominates usage, but smoothly tr
         steps:
           # --- Base Layers ---
           - provider: "gebco_2025"
-            operator: "overwrite"
+            operation: "overwrite"
 
           - provider: "usgs_3dep"
             product: "10m"
-            operator: "overwrite"
+            operation: "overwrite"
 
           # --- Middle Tiers ---
           - provider: "ncei_cudem"
-            operator: "overwrite"
+            operation: "overwrite"
 
           - provider: "noaa_bluetopo"
-            operator: "overwrite"
+            operation: "overwrite"
 
           # --- High Res Lidar ---
           - provider: "noaa_topobathy"
-            operator: "overwrite"
+            operation: "overwrite"
 
           - provider: "usgs_lidar"
-            operator: "overwrite"
+            operation: "overwrite"
 
           # --- Survey Truth (Top Priority) ---
           - provider: "ncei_bag"
-            operator: "overwrite"
+            operation: "overwrite"
 
 **Outcome**:
 A high-fidelity model that is "Best Available" at every pixel. If a ship survey (BAG) exists, it is used. If not, Lidar is used. If that fails, BlueTopo/CUDEM are used. Finally, GEBCO fills the deep ocean.

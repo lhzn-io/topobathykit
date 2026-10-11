@@ -98,7 +98,7 @@ class TestRuntimeFusion(unittest.TestCase):
                         # Step 1: CUDEM (Value 10.0, partial NaN)
                         {
                             "provider": "mock_cudem_runtime",
-                            "operator": "overwrite",
+                            "operation": "overwrite",
                             # We can't pass constructor args easily here
                             # through registry without extra logic in registry
                             # Registry instantiates with no args: cls()
@@ -106,7 +106,7 @@ class TestRuntimeFusion(unittest.TestCase):
                             # We need separate classes or a way to config.
                         },
                         # Step 2: BlueTopo (Value 50.0)
-                        {"provider": "mock_bluetopo_runtime", "operator": "overwrite"},
+                        {"provider": "mock_bluetopo_runtime", "operation": "overwrite"},
                     ],
                 }
             ],

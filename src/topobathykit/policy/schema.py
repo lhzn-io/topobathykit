@@ -1,5 +1,6 @@
+import warnings
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -35,7 +36,13 @@ class OperatorType(StrEnum):
 class TransitionRule(BaseModel):
     """
     Rule for transitioning from a specific underlying provider.
+
+    The rule fires on pixels whose current value was supplied by
+    ``target_provider``. Note that this key is ``operator``, whereas a
+    composition step uses ``operation``.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     target_provider: str
     operator: OperatorType
@@ -66,7 +73,13 @@ class FilterConfig(BaseModel):
 class CompositionStep(BaseModel):
     """
     A single step in the composition process.
+
+    Unknown keys are rejected so that a misspelled field fails validation
+    instead of silently falling back to a default. ``operator`` is accepted as
+    a deprecated alias of ``operation``.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     provider: str
     operation: OperatorType = OperatorType.metric_feather
@@ -75,6 +88,37 @@ class CompositionStep(BaseModel):
     zone: ZoneRule | None = None
     transitions: list[TransitionRule] = []
     filter: FilterConfig | None = None
+    product: str | None = None
+    """Informational label for the provider product. Not passed to the provider."""
+    description: str | None = None
+    """Human-readable note."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_operator_alias(cls, data: Any) -> Any:
+        """
+        Maps the deprecated step key ``operator`` onto ``operation``.
+
+        Policies written against earlier documentation used ``operator``,
+        which was silently dropped and left ``operation`` at its default.
+        """
+        if not isinstance(data, dict) or "operator" not in data:
+            return data
+        data = dict(data)
+        value = data.pop("operator")
+        if "operation" in data and data["operation"] != value:
+            raise ValueError(
+                f"Step sets both operation={data['operation']!r} and the deprecated "
+                f"operator={value!r}; use operation only."
+            )
+        data["operation"] = value
+        warnings.warn(
+            f"Composition step key 'operator' is deprecated; use 'operation' "
+            f"(provider {data.get('provider')!r}).",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return data
 
     @field_validator("provider")
     @classmethod
@@ -96,7 +140,10 @@ class VariableStrategy(BaseModel):
     Strategy for a specific variable (e.g., elevation).
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     name: str = "elevation"
+    description: str | None = None
     steps: list[CompositionStep]
     background: float | None = None
 

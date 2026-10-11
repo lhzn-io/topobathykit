@@ -9,9 +9,16 @@ import numpy as np
 import pytest
 import xarray as xr
 import yaml
+from pydantic import ValidationError
 
 from topobathykit.policy.loader import generate_provider_legend, hash_policy, load_policy
-from topobathykit.policy.schema import CompositionStep, FusionPolicy, VariableStrategy
+from topobathykit.policy.schema import (
+    CompositionStep,
+    FusionPolicy,
+    OperatorType,
+    TransitionRule,
+    VariableStrategy,
+)
 from topobathykit.providers.base import Provider
 from topobathykit.providers.registry import registry
 
@@ -131,3 +138,44 @@ def test_generate_provider_legend() -> None:
     # "gebco" comes before "mock_provider"
     assert legend[1] == "gebco"
     assert legend[2] == "mock_provider"
+
+
+def test_step_operator_alias_maps_to_operation() -> None:
+    """The documented-but-unsupported step key `operator` must not be dropped."""
+    with pytest.warns(FutureWarning, match="operator"):
+        step = CompositionStep(provider="mock_provider", operator="overwrite")  # type: ignore[call-arg]
+    assert step.operation == OperatorType.overwrite
+
+
+def test_step_operator_alias_conflict_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="operation only"):
+        CompositionStep(provider="mock_provider", operation="overwrite", operator="metric_feather")  # type: ignore[call-arg, arg-type]
+
+
+def test_step_informational_fields_are_accepted() -> None:
+    step = CompositionStep(provider="mock_provider", product="geotiff", description="BlueTopo")
+    assert step.product == "geotiff"
+    assert step.operation == OperatorType.metric_feather
+
+
+@pytest.mark.parametrize(
+    ("model", "kwargs"),
+    [
+        (CompositionStep, {"provider": "mock_provider", "operaton": "overwrite"}),
+        (TransitionRule, {"target_provider": "gebco", "operator": "overwrite", "operation": "overwrite"}),
+        (VariableStrategy, {"name": "elevation", "steps": [], "stpes": []}),
+    ],
+)
+def test_unknown_policy_keys_are_rejected(model: type, kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        model(**kwargs)
+
+
+def test_example_policies_validate_without_deprecation_warnings() -> None:
+    import warnings
+
+    examples = Path(__file__).resolve().parents[2] / "policies" / "examples"
+    for path in sorted(examples.glob("*.yaml")):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FutureWarning)
+            FusionPolicy(**yaml.safe_load(path.read_text()))

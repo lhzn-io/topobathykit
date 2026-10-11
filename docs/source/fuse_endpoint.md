@@ -160,8 +160,8 @@ policy = {
         {
             "name": "elevation",
             "steps": [
-                {"provider": "gebco_2025", "operator": "overwrite"},
-                {"provider": "ncei_cudem", "operator": "overwrite"},
+                {"provider": "gebco_2025", "operation": "overwrite"},
+                {"provider": "ncei_cudem", "operation": "overwrite"},
             ],
         }
     ],

@@ -21,11 +21,11 @@ A policy file consists of metadata and a list of variables (layers) to generate.
           # List of composition steps (Bottom-Up order)
           - provider: "gebco"
             product: "sub_ice_topo_bathymetry"
-            operator: "overwrite"
+            operation: "overwrite"
 
           - provider: "usgs_3dep"
             product: "1m"
-            operator: "overwrite"
+            operation: "overwrite"
 
 Variables
 ---------
@@ -41,11 +41,18 @@ Fields
 ~~~~~~
 
 - **provider**: The registered provider alias (e.g., ``gebco``, ``usgs_3dep``, ``ncei_bag``).
-- **product**: (Optional) Product sub-type passed to the provider.
-- **operator**: The blending operation to apply.
+- **operation**: The blending operation to apply: ``overwrite`` or ``metric_feather`` (the default). ``metric_feather`` without a ``blend_distance`` behaves as ``overwrite``.
+- **blend_distance**: (Optional) Feathering distance in meters for ``metric_feather``.
+- **product**: (Optional) Informational label for the provider product. It is not passed to the provider.
 - **description**: (Optional) Human-readable note.
 - **filter**: (Optional) FilterConfig options mapping to provider-specific arguments (e.g. ``include_patterns``, ``exclude_patterns``, ``max_interpolation_gap_m``).
 - **transitions**: (Optional) A list of rules for smoothing edges based on what lies beneath.
+
+Unknown keys in a step, a transition rule or a variable are rejected when the
+policy is loaded, so a misspelled field fails loudly instead of falling back to
+a default. The step key ``operator`` is still accepted as a deprecated alias of
+``operation`` and emits a ``FutureWarning``. Transition rules are the exception:
+their key is ``operator`` (see below).
 
 Advanced Provider Filtering (FilterConfig)
 ------------------------------------------
@@ -55,7 +62,7 @@ Providers can accept arbitrary metadata or filtering instructions via the ``filt
 .. code-block:: yaml
 
     - provider: "noaa_bluetopo"
-      operator: "metric_feather"
+      operation: "metric_feather"
       filter:
         exclude_patterns: ["*.interpolated", "Chart*"]
         max_interpolation_gap_m: 15.0
@@ -72,7 +79,7 @@ Hard replacement. Where the new layer has data (valid), it replaces the underlyi
 
 .. code-block:: yaml
 
-    operator: "overwrite"
+    operation: "overwrite"
 
 metric_feather
 ~~~~~~~~~~~~~~
@@ -80,7 +87,7 @@ Smooths the transition between the new layer and the base layer over a specified
 
 .. code-block:: yaml
 
-    operator: "metric_feather"
+    operation: "metric_feather"
     blend_distance: 100.0  # Meters
 
 Topologies (Transition Rules)
@@ -93,9 +100,9 @@ For advanced fusion, you can specify **Transition Rules** to apply different ope
 .. code-block:: yaml
 
     - provider: "noaa_bluetopo"
-      operator: "overwrite"  # Default
+      operation: "overwrite"  # Applied where no transition rule matches
       transitions:
-        - target_provider: "gebco"
+        - target_provider: "gebco_2025"
           operator: "metric_feather"
           blend_distance: 500.0
 
