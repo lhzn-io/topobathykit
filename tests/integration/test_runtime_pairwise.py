@@ -208,3 +208,70 @@ def test_pairwise_fusion_logic(pairwise_policy_file: str) -> None:
     assert val_c != 0.0
 
     print("Integration Test Passed: Pairwise logic confirmed.")
+
+
+class SurveyLidarProvider(LidarProvider):
+    """Lidar mock that, like the real providers, reports per-survey source ids."""
+
+    SURVEY_ID = 10042  # A noaa_topobathy-style id (project id + 10000)
+
+    def fetch_layer(self, *args: Any, **kwargs: Any) -> xr.Dataset:  # type: ignore[override]
+        da = super().fetch_layer(*args, **kwargs)
+        source_id = xr.where(da.notnull(), self.SURVEY_ID, 0).astype(np.uint32)
+        source_id.rio.write_crs("EPSG:4326", inplace=True)
+        source_id.rio.write_nodata(0, inplace=True)
+        source_id.rio.write_transform(da.rio.transform(), inplace=True)
+        da.name = "elevation"
+        return xr.Dataset({"elevation": da, "source_id": source_id})
+
+
+def test_transition_fires_when_underlying_provider_reports_survey_ids(tmp_path: Any) -> None:
+    """
+    A transition rule must match on the provider beneath a pixel even when that
+    provider overwrote source_elevation with its own survey id. The structure
+    step overwrites by default but feathers into the lidar over 500 m, so a
+    point 0.0015 deg inside the structure edge must be blended, not 20.
+    """
+    registry.register("base", BaseProvider)
+    registry.register("survey_lidar", SurveyLidarProvider)
+    registry.register("structure", StructureProvider)
+
+    policy_content = {
+        "name": "TransitionWithSurveyIds",
+        "crs": "EPSG:32618",
+        "variables": [
+            {
+                "name": "elevation",
+                "steps": [
+                    {"provider": "base", "operation": "overwrite"},
+                    {"provider": "survey_lidar", "operation": "overwrite"},
+                    {
+                        "provider": "structure",
+                        "operation": "overwrite",
+                        "transitions": [
+                            {
+                                "target_provider": "survey_lidar",
+                                "operator": "metric_feather",
+                                "blend_distance": 500.0,
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    p_path = tmp_path / "transition_survey_ids.yaml"
+    p_path.write_text(yaml.dump(policy_content))
+
+    ds = run(str(p_path), (-74.01, 40.70, -74.00, 40.71), resolution=10.0, use_cache=False)
+
+    trans = Transformer.from_crs("EPSG:4326", "EPSG:32618", always_xy=True)
+    xs, ys = trans.transform([-74.009, -74.006], [40.705, 40.705])
+    elev = ds["elevation"]
+    src = ds["source_elevation"]
+
+    val_a = elev.sel(x=xs[0], y=ys[0], method="nearest").item()
+    val_b = elev.sel(x=xs[1], y=ys[1], method="nearest").item()
+    assert val_a == 10.0, f"Expected pure lidar (10.0), got {val_a}"
+    assert src.sel(x=xs[0], y=ys[0], method="nearest").item() == SurveyLidarProvider.SURVEY_ID
+    assert 10.0 < val_b < 20.0, f"Expected the lidar transition to feather (10 < x < 20), got {val_b}"

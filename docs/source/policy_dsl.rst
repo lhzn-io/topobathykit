@@ -93,7 +93,7 @@ Smooths the transition between the new layer and the base layer over a specified
 Topologies (Transition Rules)
 -----------------------------
 
-For advanced fusion, you can specify **Transition Rules** to apply different operators depending on *which* provider is currently at a pixel in the base layer.
+For advanced fusion, you can specify **Transition Rules** to apply different operators depending on *which* provider supplied the current value of a pixel in the base layer. The runtime tracks this per pixel by provider, independent of the finer per-survey ids written to ``source_elevation``.
 
 *Example*: Feather into GEBCO (Bathymetry), but Hard-Cut against USGS Lidar (Land).
 

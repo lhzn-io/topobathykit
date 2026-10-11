@@ -182,6 +182,11 @@ def _run_cell(
     source_elevation.attrs["_FillValue"] = 0
     source_elevation.encoding["_FillValue"] = 0
 
+    # Legend id of the provider that supplied each pixel. Transition rules match
+    # against this rather than source_elevation, which providers overwrite with
+    # their own per-survey ids that never equal a legend id.
+    provider_index = xr.zeros_like(source_elevation, dtype=np.uint32)
+
     base_legend = generate_provider_legend(policy)
     cell_provenance_dict: dict[int, dict[str, str]] = {
         k: {"name": f"{v} (Base Terrain)", "provider": v} for k, v in base_legend.items()
@@ -383,8 +388,8 @@ def _run_cell(
                 if target_id is None:
                     continue
 
-                # Identify overlap: Valid New Data AND Underlying Source == TargetID
-                transition_mask = provider_valid_mask & (source_elevation == target_id)
+                # Identify overlap: Valid New Data AND Underlying Provider == TargetID
+                transition_mask = provider_valid_mask & (provider_index == target_id)
 
                 if not transition_mask.any():
                     continue
@@ -418,6 +423,7 @@ def _run_cell(
                 elevation = elevation.where(~remaining_mask, blended_default)
 
             # Update Provenance (Global update for all valid pixels)
+            provider_index = provider_index.where(~provider_valid_mask, np.uint32(provider_id))
             if aligned_source_id is not None:
                 source_detail_mask = (
                     provider_valid_mask & aligned_source_id.notnull() & (aligned_source_id > 0)
