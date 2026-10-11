@@ -2,8 +2,8 @@
 USGS 3DEP Provider module.
 
 This module implements the provider for USGS 3D Elevation Program (3DEP) data.
-It queries the Microsoft Planetary Computer STAC API for '3dep-seamless', 'cop-dem-glo-30',
-and 'nasadem' collections.
+It queries the Microsoft Planetary Computer STAC API for the '3dep-seamless' collection.
+The 'cop-dem-glo-30' and 'nasadem' collections have their own providers.
 """
 
 import logging
@@ -21,7 +21,15 @@ from rioxarray.merge import merge_arrays
 
 from ..config import get_cache_root
 from ..manifest import OfflineManifest
-from .base import Provider, ProviderNoDataError, interpolate_small_gaps, sanitize_elevation_nodata, source_uid
+from .base import (
+    Provider,
+    ProviderFetchError,
+    ProviderNoDataError,
+    interpolate_small_gaps,
+    matches_pattern,
+    sanitize_elevation_nodata,
+    source_uid,
+)
 from .registry import registry
 
 logger = logging.getLogger(__name__)
@@ -80,7 +88,17 @@ class Usgs3DepProvider(Provider):
         **kwargs: Any,
     ) -> xr.Dataset:
         """
-        Fetch USGS 3DEP (or fallback) data for the given bounding box.
+        Fetch USGS 3DEP seamless data for the given bounding box.
+
+        ``include_patterns`` and ``exclude_patterns`` in the step filter are
+        matched against each STAC asset's file name (e.g.
+        ``USGS_13_n41w074.tif``), as the ``/analyze`` endpoint reports them.
+
+        Raises:
+            ProviderNoDataError: No asset covers the bbox, or the patterns
+                exclude every asset.
+            ProviderFetchError: The STAC query or every asset read failed, so
+                a retry may succeed.
         """
         filter_opts = kwargs.get("filter", {})
         max_interpolation_gap_m = filter_opts.get("max_interpolation_gap_m")
@@ -89,7 +107,12 @@ class Usgs3DepProvider(Provider):
         bounds = self._normalize_bbox(bbox, crs)
 
         # 1. 3DEP Seamless (10m) - Best for US
-        da = self._fetch_collection(bounds, "3dep-seamless")
+        da = self._fetch_collection(
+            bounds,
+            "3dep-seamless",
+            include_patterns=filter_opts.get("include_patterns"),
+            exclude_patterns=filter_opts.get("exclude_patterns"),
+        )
 
         if da is not None:
             if max_interpolation_gap_m and resolution:
@@ -134,6 +157,10 @@ class Usgs3DepProvider(Provider):
     ) -> list[dict] | None:
         """
         Query STAC API for Items. Handles Negative Caching and Locking.
+
+        Returns None when the collection has no items for the bbox (or in
+        offline mode). Raises ProviderFetchError when the query itself fails
+        after all retries, so the failure is not mistaken for no coverage.
         """
         if self.offline_mode:
             return None
@@ -232,7 +259,7 @@ class Usgs3DepProvider(Provider):
                         logger.log(log_level, msg)
 
                         if is_last_attempt:
-                            return None
+                            raise ProviderFetchError(msg) from e
 
                         # If network error, maybe wait longer?
                         sleep_time = (2**attempt) + random.uniform(0.1, 1.0)
@@ -241,13 +268,29 @@ class Usgs3DepProvider(Provider):
 
                         time.sleep(sleep_time)
 
+        except ProviderFetchError:
+            raise
         except Exception as e:
             logger.error(f"STAC Query Lock/Execution Failed: {e}")
-            return None
+            raise ProviderFetchError(f"STAC query for {collection_id} failed: {e}") from e
 
         return None
 
-    def _fetch_collection(self, bounds: tuple, collection_id: str) -> xr.Dataset | None:
+    def _fetch_collection(
+        self,
+        bounds: tuple,
+        collection_id: str,
+        include_patterns: list[str] | None = None,
+        exclude_patterns: list[str] | None = None,
+    ) -> xr.Dataset | None:
+        """
+        Stream, clip and merge the collection's assets that cover ``bounds``.
+
+        Returns None when no asset covers the bbox or the patterns exclude
+        every asset. Raises ProviderFetchError when the query fails or every
+        covering asset failed to stream; such failures are not recorded as
+        no coverage in the manifest.
+        """
         try:
             items = None
 
@@ -301,8 +344,26 @@ class Usgs3DepProvider(Provider):
                 logger.debug(f"Usgs3DepProvider found 0 items for {collection_id}")
                 return None
 
+            # Policy include/exclude patterns match the asset file name, the
+            # same name /analyze reports. Filtering is per policy, so an empty
+            # result is not written to the manifest's negative cache.
+            if include_patterns or exclude_patterns:
+                kept = []
+                for item in items:
+                    name = Path(item["href"].split("?")[0]).name
+                    if include_patterns and not matches_pattern(name, include_patterns):
+                        continue
+                    if exclude_patterns and matches_pattern(name, exclude_patterns):
+                        continue
+                    kept.append(item)
+                if not kept:
+                    logger.debug(f"All {len(items)} {collection_id} item(s) excluded by filter patterns")
+                    return None
+                items = kept
+
             items_found: list[dict[str, Any]] = []
             das: list[xr.DataArray] = []
+            stream_errors = 0
 
             for item in items:
                 href = item["href"]
@@ -394,7 +455,10 @@ class Usgs3DepProvider(Provider):
                             # 2. Refresh: Force Query API
                             # We query the specific item's bbox to get a fresh token for it
                             item_bbox = tuple(item.get("bbox", bounds))
-                            fresh_items = self._query_stac_api(item_bbox, collection_id)
+                            try:
+                                fresh_items = self._query_stac_api(item_bbox, collection_id)
+                            except ProviderFetchError:
+                                fresh_items = None
 
                             if fresh_items:
                                 # Find the matching item in fresh results (by spatial overlap)
@@ -425,6 +489,7 @@ class Usgs3DepProvider(Provider):
                             logger.error("Failed to refresh SAS token.")
 
                         logger.warning(f"Failed to stream land asset {href}: {e}")
+                        stream_errors += 1
                         break
 
             # Update Manifest only with successfully opened items
@@ -438,6 +503,11 @@ class Usgs3DepProvider(Provider):
                     )
 
             if not das:
+                if stream_errors:
+                    # Covering assets exist but could not be read: retryable, not empty.
+                    raise ProviderFetchError(
+                        f"{stream_errors} {collection_id} asset(s) failed to stream for {bounds}"
+                    )
                 logger.debug(f"3DEP/Land items found but resulted in no valid data for {collection_id}.")
                 # Negative Cache: Mark this bbox as having no coverage to prevent re-querying
                 self.manifest.record_search(collection_id, bounds, 0)
@@ -509,16 +579,24 @@ class Usgs3DepProvider(Provider):
 
             # Check if effective data remains
             if merged["elevation"].isnull().all():
+                if stream_errors:
+                    raise ProviderFetchError(
+                        f"{stream_errors} {collection_id} asset(s) failed to stream for {bounds}"
+                    )
                 logger.debug(f"3DEP/Land data masked out (All Water?) for {collection_id}.")
                 self.manifest.record_search(collection_id, bounds, 0)
                 return None
 
             merged.attrs["provenance_dict"] = provenance_dict
+            if stream_errors:
+                merged.attrs["fetch_errors"] = stream_errors
             return cast(xr.Dataset, merged)
 
+        except ProviderFetchError:
+            raise
         except Exception as e:
             logger.error(f"Error fetching {collection_id}: {e}", exc_info=True)
-            return None
+            raise ProviderFetchError(f"Error fetching {collection_id}: {e}") from e
 
 
 # Register

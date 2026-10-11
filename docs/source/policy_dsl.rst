@@ -67,7 +67,7 @@ Providers can accept arbitrary metadata or filtering instructions via the ``filt
         exclude_patterns: ["*.interpolated", "Chart*"]
         max_interpolation_gap_m: 15.0
 
-- **include_patterns** / **exclude_patterns**: A list of strings (supporting ``fnmatch`` wildcards like ``*``) to whitelist or blacklist specific survey IDs or URLs (e.g. omitting historical or interpolated data from BlueTopo or BAGs).
+- **include_patterns** / **exclude_patterns**: A list of strings (supporting ``fnmatch`` wildcards like ``*``) to whitelist or blacklist specific survey IDs or URLs (e.g. omitting historical or interpolated data from BlueTopo or BAGs). For ``usgs_3dep`` the patterns match the STAC asset file name (e.g. ``USGS_13_n41w074.tif``), the same names ``/analyze`` reports.
 - **max_interpolation_gap_m**: Float distance in meters. Any internal `NaN` gap (data holiday) smaller than this physical distance will be natively interpolated via distance-transform morphology by the provider before it is merged. This heals "screen-door" artifacts without blurring the actual survey boundaries.
 
 Operators
