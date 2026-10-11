@@ -224,7 +224,9 @@ def _build_zarr_attrs(
         "crs": crs or "EPSG:4326",
         "bbox": [float(v) for v in bbox],
         "resolution_m": float(resolution),
-        "vertical_datum": ds.attrs.get("vertical_datum", "Unknown"),
+        # US providers deliver NAVD88, natively or through VDatum at fetch
+        # time; global fill (GEBCO, GBR100) keeps its native MSL-like reference.
+        "vertical_datum": ds.attrs.get("vertical_datum", "NAVD88"),
         "policy": policy_name,
         "providers_used": sorted(set(providers_used)),
         "created": datetime.now(UTC).isoformat(),
@@ -1896,7 +1898,7 @@ async def get_quality_report(
             raise HTTPException(status_code=404, detail="No elevation data generated for region")
 
         elevation = ds["elevation"]
-        source_map = ds.get("source_id")  # Assuming source_id is preserved if generated
+        source_map = ds.get("source_elevation")  # Per-pixel source ids written by run()
 
         report_data = calculate_spatial_stats(
             elevation=elevation,

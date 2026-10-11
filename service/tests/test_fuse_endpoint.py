@@ -211,6 +211,7 @@ class TestFuseEndpoint:
             assert ds_loaded.attrs["crs"] == "EPSG:4326"
             assert ds_loaded.attrs["bbox"] == [-74.0, 40.5, -73.5, 41.0]
             assert ds_loaded.attrs["resolution_m"] == 25.0
+            assert ds_loaded.attrs["vertical_datum"] == "NAVD88"
             assert "wlis.yaml" in ds_loaded.attrs["policy"]  # Default policy
             assert isinstance(ds_loaded.attrs["created"], str)
             assert isinstance(ds_loaded.attrs["providers_used"], list)
@@ -305,3 +306,34 @@ class TestFuseEndpoint:
             )
 
         assert response.status_code == 404
+
+
+class TestQualityReport:
+    """Test the /api/v1/quality/report endpoint."""
+
+    @patch("topobathyserve.main.run")
+    def test_vdatum_risk_counts_steps_at_source_seams(self, mock_run: MagicMock) -> None:
+        """A 10 m step where two sources meet must register as VDatum risk, not 0."""
+        x = np.linspace(-74.0, -73.99, 10)
+        y = np.linspace(40.71, 40.70, 10)
+        elev = np.zeros((10, 10), dtype=np.float32)
+        elev[:, 5:] = -10.0
+        src = np.full((10, 10), 5_000_001, dtype=np.uint32)
+        src[:, 5:] = 6_000_001
+        mock_run.return_value = xr.Dataset(
+            {
+                "elevation": xr.DataArray(elev, coords={"y": y, "x": x}, dims=("y", "x")),
+                "source_elevation": xr.DataArray(src, coords={"y": y, "x": x}, dims=("y", "x")),
+            }
+        )
+
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/v1/quality/report",
+                params={"north": 40.71, "south": 40.70, "west": -74.0, "east": -73.99, "resolution": 10.0},
+            )
+
+        assert response.status_code == 200
+        stats = response.json()["stats"]
+        assert stats["vdatum_risk_score"] > 0
+        assert stats["steep_cliffs_count"] == 0
