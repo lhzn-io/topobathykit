@@ -166,6 +166,23 @@ class VDatumResolver:
         return session
 
     @staticmethod
+    def _check_frames(params: dict[str, Any], data: Any) -> None:
+        """Raise if VDatum converted between other frames than the ones requested.
+
+        The API ignores parameters it does not recognise and falls back to its
+        default conversion (NAVD88 to MLLW) without an error. Requests once used
+        the names `s_vframe` and `t_vframe`, so every offset was that default:
+        +0.52 m at Fishers Island where MLLW to NAVD88 is -0.52 m. The response
+        echoes the frames it used; a mismatch is now an error, not an offset.
+        """
+        if not isinstance(data, dict):
+            return
+        for key in ("s_v_frame", "t_v_frame"):
+            want, got = params.get(key), data.get(key)
+            if want is not None and got is not None and str(got).upper() != str(want).upper():
+                raise VDatumError(f"VDatum converted {key}={got}, not the requested {want}: {params}")
+
+    @staticmethod
     def _get_json(params: dict[str, Any]) -> Any:
         """GET the VDatum API and return the decoded JSON body.
 
@@ -180,7 +197,9 @@ class VDatumResolver:
             try:
                 response = session.get(VDatumResolver.VDATUM_API, params=params, timeout=VDATUM_TIMEOUT_S)
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                VDatumResolver._check_frames(params, data)
+                return data
             except (requests.Timeout, requests.ConnectionError) as e:
                 last_exc = e
             except requests.HTTPError as e:
@@ -203,21 +222,21 @@ class VDatumResolver:
 
     @staticmethod
     @lru_cache(maxsize=1024)
-    @sqlite_vdatum_cache("navd88_lmsl")
+    @sqlite_vdatum_cache("navd88_lmsl_v2")
     def get_navd88_to_lmsl_offset(lat: float, lon: float) -> float:
         """
         Calculates the vertical shift to convert NAVD88 elevation to LMSL.
-        LMSL = NAVD88 - Offset
+        Height above LMSL = height above NAVD88 + Offset
         """
         # API requires source/target/region
         params: dict[str, Any] = {
             "s_x": lon,
             "s_y": lat,
             "s_z": 0.0,  # Explicitly convert 0
-            "s_hframe": "NAD83_2011",
-            "s_vframe": "NAVD88",
-            "t_hframe": "NAD83_2011",
-            "t_vframe": "LMSL",
+            "s_h_frame": "NAD83_2011",
+            "s_v_frame": "NAVD88",
+            "t_h_frame": "NAD83_2011",
+            "t_v_frame": "LMSL",
             "region": "contiguous",
             "result_format": "json",
         }
@@ -241,7 +260,7 @@ class VDatumResolver:
 
     @staticmethod
     @lru_cache(maxsize=1024)
-    @sqlite_vdatum_cache("mllw_navd88")
+    @sqlite_vdatum_cache("mllw_navd88_v2")
     def get_mllw_to_navd88_offset(lat: float, lon: float) -> float:
         """
         Calculates shift from MLLW to NAVD88.
@@ -252,10 +271,10 @@ class VDatumResolver:
             "s_x": lon,
             "s_y": lat,
             "s_z": 0.0,
-            "s_hframe": "NAD83_2011",
-            "s_vframe": "MLLW",
-            "t_hframe": "NAD83_2011",
-            "t_vframe": "NAVD88",
+            "s_h_frame": "NAD83_2011",
+            "s_v_frame": "MLLW",
+            "t_h_frame": "NAD83_2011",
+            "t_v_frame": "NAVD88",
             "region": "contiguous",
             "result_format": "json",
         }
@@ -281,7 +300,7 @@ class VDatumResolver:
 
     @staticmethod
     @lru_cache(maxsize=1024)
-    @sqlite_vdatum_cache("ellipsoid_navd88")
+    @sqlite_vdatum_cache("ellipsoid_navd88_v2")
     def get_ellipsoid_to_navd88_offset(lat: float, lon: float) -> float:
         """
         Calculates shift from NAD83(2011) Ellipsoid to NAVD88 using GEOID18.
@@ -291,12 +310,12 @@ class VDatumResolver:
             "s_x": lon,
             "s_y": lat,
             "s_z": 0.0,
-            "s_hframe": "NAD83_2011",
-            "s_vframe": "NAD83_2011",  # Ellipsoid
-            "t_hframe": "NAD83_2011",
-            "t_vframe": "NAVD88",
+            "s_h_frame": "NAD83_2011",
+            "s_v_frame": "NAD83_2011",  # Ellipsoid
+            "t_h_frame": "NAD83_2011",
+            "t_v_frame": "NAVD88",
             "region": "contiguous",
-            "geoid": "GEOID18",  # Explicitly request GEOID18
+            "t_v_geoid": "geoid18",
             "result_format": "json",
         }
 
@@ -319,7 +338,7 @@ class VDatumResolver:
 
     @staticmethod
     @lru_cache(maxsize=1024)
-    @sqlite_vdatum_cache("egm2008_navd88")
+    @sqlite_vdatum_cache("egm2008_navd88_v2")
     def get_egm2008_to_navd88_offset(lat: float, lon: float) -> float:
         """
         Calculates shift from EGM2008 to NAVD88.
@@ -329,10 +348,11 @@ class VDatumResolver:
             "s_x": lon,
             "s_y": lat,
             "s_z": 0.0,
-            "s_hframe": "WGS84_G1674",  # EGM2008 implies WGS84 usually
-            "s_vframe": "EGM2008",
-            "t_hframe": "NAD83_2011",
-            "t_vframe": "NAVD88",
+            "s_h_frame": "WGS84_G1674",  # EGM2008 implies WGS84 usually
+            "s_v_frame": "EGM2008",
+            "s_v_geoid": "egm2008",
+            "t_h_frame": "NAD83_2011",
+            "t_v_frame": "NAVD88",
             "region": "contiguous",
             "result_format": "json",
         }

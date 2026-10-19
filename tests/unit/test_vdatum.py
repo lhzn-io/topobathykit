@@ -147,3 +147,30 @@ def test_vdatum_outage_is_not_mistaken_for_no_coverage() -> None:
             VDatumResolver.get_robust_mllw_to_navd88_offset(43.0, -70.0)
 
     assert mock_get.call_count == 3
+
+
+def test_vdatum_requests_name_the_vertical_frames() -> None:
+    """The API's parameters are s_v_frame and t_v_frame; unknown names are ignored silently."""
+    with patch("topobathykit.vdatum.requests.Session.get") as mock_get:
+        mock_get.return_value = _ok("-0.518")
+        VDatumResolver.get_mllw_to_navd88_offset.cache_clear()
+
+        assert VDatumResolver.get_mllw_to_navd88_offset(41.17, -72.10) == -0.518
+        params = mock_get.call_args.kwargs["params"]
+        assert params["s_v_frame"] == "MLLW"
+        assert params["t_v_frame"] == "NAVD88"
+        assert "s_vframe" not in params and "t_vframe" not in params
+
+
+def test_vdatum_rejects_a_conversion_between_other_frames() -> None:
+    """A response echoing other frames than requested (the API's default fallback) raises."""
+    from topobathykit.vdatum import VDatumError
+
+    with patch("topobathykit.vdatum.requests.Session.get") as mock_get:
+        response = _ok("0.518")
+        response.json.return_value = {"t_z": "0.518", "s_v_frame": "NAVD88", "t_v_frame": "MLLW"}
+        mock_get.return_value = response
+        VDatumResolver.get_mllw_to_navd88_offset.cache_clear()
+
+        with pytest.raises(VDatumError, match="not the requested MLLW"):
+            VDatumResolver.get_mllw_to_navd88_offset(41.17, -72.10)

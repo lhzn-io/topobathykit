@@ -25,7 +25,7 @@ from shapely.geometry import Point, box
 from ..config import get_cache_root
 from ..quality import QualityClass
 from ..runtime import should_consolidate
-from ..vdatum import VDatumNoDataError, VDatumResolver
+from ..vdatum import VDatumResolver
 from .base import (
     Provider,
     ProviderFetchError,
@@ -1192,10 +1192,8 @@ class NoaaBlueTopoProvider(Provider):
                 if val_item == da.rio.nodata:
                     return None
 
-                # VDatum: Convert Raw MLLW to NAVD88
-                # Consistent with tile loading logic
-                offset = self.vdatum.get_robust_mllw_to_navd88_offset(lat, lon)
-                return float(val_item) + offset
+                # BlueTopo is published on NAVD88: no datum shift (see load_tile_as_da).
+                return float(val_item)
 
         except Exception as e:
             logger.error(f"BlueTopo Fetch Error: {e}", exc_info=True)
@@ -1224,8 +1222,9 @@ class NoaaBlueTopoProvider(Provider):
         Validates geotransform preservation through the caching pipeline.
         """
         # 1. Check Zarr Cache First (Fastest)
-        # Append _navd88 to distinguish from raw caches
-        zarr_name = f"{tile_id}_navd88.zarr"
+        # _navd88 distinguishes it from raw caches; _v2 retires tiles cached with the old
+        # MLLW shift (see the VDatum note below).
+        zarr_name = f"{tile_id}_navd88_v2.zarr"
         zarr_dir = self.cache_dir / "zarr"
         zarr_path = zarr_dir / zarr_name
 
@@ -1346,73 +1345,11 @@ class NoaaBlueTopoProvider(Provider):
                 with contextlib.suppress(Exception):
                     ds_to_cache["source_id"].rio.write_transform(orig_transform, inplace=True)
 
-            # --- VDatum: MLLW -> NAVD88 Conversion ---
-            # BlueTopo (Chart Datum / MLLW) needs correction to NAVD88 for fusion consistency.
-            try:
-                # Use tile center to look up offset
-                bounds = ds_to_cache.rio.bounds()  # (minx, miny, maxx, maxy)
-                cx = (bounds[0] + bounds[2]) / 2.0
-                cy = (bounds[1] + bounds[3]) / 2.0
-
-                lat, lon = cy, cx
-                # Check CRS against EPSG:4326 object or string.
-                # rioxarray/rasterio CRS comparison can be tricky.
-                # Simplest check is .to_epsg() or string comparison if it's not None.
-                crs_obj = ds_to_cache.rio.crs
-                is_4326 = False
-                if crs_obj:
-                    try:
-                        if crs_obj.to_epsg() == 4326:
-                            is_4326 = True
-                    except Exception:
-                        pass
-                    if str(crs_obj).upper() == "EPSG:4326":
-                        is_4326 = True
-
-                if not is_4326 and crs_obj:
-                    from pyproj import Transformer
-
-                    transformer = Transformer.from_crs(crs_obj, "EPSG:4326", always_xy=True)
-                    lon, lat = transformer.transform(cx, cy)
-
-                # Retrieve offset: NAVD88 = MLLW + Offset
-                # Note: get_mllw_to_navd88_offset is cached and static
-                offset = self.vdatum.get_robust_mllw_to_navd88_offset(lat, lon)
-
-                # Validate offset is reasonable (e.g. within -100 to 100m)
-                if -100 < offset < 100:
-                    logger.info(
-                        f"Applying MLLW->NAVD88 offset of {offset:.3f}m for BlueTopo tile {tile_id} "
-                        f"(at {lat:.4f}, {lon:.4f})"
-                    )
-                    ds_to_cache["elevation"] = ds_to_cache["elevation"] + offset
-                    ds_to_cache.attrs["vdatum_offset"] = offset
-                    ds_to_cache.attrs["vertical_datum"] = "NAVD88"
-                else:
-                    logger.warning(f"Suspicious VDatum offset {offset} for {tile_id}, dropping tile.")
-                    return None
-
-            except VDatumNoDataError as e:
-                # No VDatum model near this tile: a property of the location, not an
-                # outage, so dropping the tile is the stable outcome.
-                logger.warning(
-                    f"VDatum has no MLLW->NAVD88 coverage for BlueTopo tile {tile_id}: {e}. "
-                    "Dropping tile to prevent artificial cliffs."
-                )
-                return None
-            except Exception as e:
-                # Timeouts or other API failures. Previously this returned an empty
-                # Dataset, which fetch_layer then indexed for "elevation" and failed
-                # the whole step with an unrelated KeyError. Raise the transient
-                # signal instead so the cell is not cached and is retried.
-                logger.warning(
-                    f"VDatum conversion failed for BlueTopo tile {tile_id}: {e}. "
-                    "Dropping dataset to prevent artificial cliffs."
-                )
-                raise ProviderFetchError(
-                    f"VDatum MLLW->NAVD88 conversion failed for BlueTopo tile {tile_id}: "
-                    f"{type(e).__name__}: {e}"
-                ) from e
+            # BlueTopo is published on NAVD88 (NOAA's BlueTopo specification, and each tile's
+            # VERTICALDATUMWKT tag), so its elevations need no datum shift. An MLLW to NAVD88
+            # shift used to be added here, and with the wrong sign, which raised the seabed by
+            # 0.2 to 1.6 m around Long Island Sound.
+            ds_to_cache.attrs["vertical_datum"] = "NAVD88"
 
             ds_to_cache = self._stash_cache_crs(ds_to_cache)
             ds_to_cache = self._ensure_dataset_spatial_ref(ds_to_cache)

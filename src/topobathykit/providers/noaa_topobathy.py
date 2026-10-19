@@ -1320,7 +1320,7 @@ class NoaaTopobathyProvider(Provider):
 
         # --- CACHE KEY GENERATION ---
         # Legacy/Full file cache name (without bbox slice)
-        full_zarr_name = local_filename.replace(".tif", "").replace(".tiff", "") + "_navd88.zarr"
+        full_zarr_name = local_filename.replace(".tif", "").replace(".tiff", "") + "_navd88_v2.zarr"
         full_zarr_path = self.cache_dir / "zarr" / full_zarr_name
 
         # If bbox provided, include hash in filename

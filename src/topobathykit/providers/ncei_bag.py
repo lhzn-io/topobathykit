@@ -160,7 +160,7 @@ def _read_bag_cached(local_path: Path) -> xr.DataArray | None:
     # Zarr is more parallel-friendly and I/O efficient than monolithic HDF5/NetCDF
     # Store Zarr in "zarr" subdirectory
     zarr_dir = local_path.parent / "zarr"
-    zarr_path = zarr_dir / local_path.name.replace(".bag", "_navd88.zarr")
+    zarr_path = zarr_dir / local_path.name.replace(".bag", "_navd88_v2.zarr")
 
     # If we have a pre-computed NAVD88 Zarr store, load strictly that.
     if zarr_path.exists():
@@ -1387,7 +1387,7 @@ class BAGProvider(Provider):
 
             # Fast-path cache check: if Zarr exists, we don't need the massive .bag file anymore
             zarr_dir = local_path.parent / "zarr"
-            zarr_path = zarr_dir / local_path.name.replace(".bag", "_navd88.zarr")
+            zarr_path = zarr_dir / local_path.name.replace(".bag", "_navd88_v2.zarr")
 
             if zarr_path.exists():
                 da = self._read_bag(local_path)

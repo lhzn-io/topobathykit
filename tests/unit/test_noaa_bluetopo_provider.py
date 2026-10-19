@@ -239,17 +239,13 @@ def _three_band_tile() -> xr.DataArray:
     return da
 
 
-def test_load_tile_vdatum_outage_raises_fetch_error(tmp_path: Path) -> None:
-    """A VDatum timeout must raise, not return an empty Dataset.
+def test_load_tile_keeps_navd88_elevations_without_vdatum(tmp_path: Path) -> None:
+    """BlueTopo is published on NAVD88, so a tile's elevations pass through unshifted.
 
-    The empty Dataset used to surface in fetch_layer as the unrelated error
-    "No variable named 'elevation'" and drop the whole BlueTopo step.
+    An MLLW to NAVD88 shift used to be added here (with the wrong sign), raising
+    the seabed by 0.2 to 1.6 m around Long Island Sound.
     """
-    import pytest
     import rioxarray
-
-    from topobathykit.providers.base import ProviderFetchError
-    from topobathykit.vdatum import VDatumUnavailableError
 
     provider = _new_provider(tmp_path)
 
@@ -259,29 +255,12 @@ def test_load_tile_vdatum_outage_raises_fetch_error(tmp_path: Path) -> None:
         patch.object(
             provider.vdatum,
             "get_robust_mllw_to_navd88_offset",
-            side_effect=VDatumUnavailableError("read timeout"),
-        ),
-        pytest.raises(ProviderFetchError, match="VDatum"),
-    ):
-        provider.load_tile_as_da("TILE_T", (-72.0, 41.0, -71.99, 41.01))
-
-    assert not (provider.cache_dir / "zarr" / "TILE_T_navd88.zarr").exists()
-
-
-def test_load_tile_without_vdatum_coverage_drops_tile(tmp_path: Path) -> None:
-    import rioxarray
-
-    from topobathykit.vdatum import VDatumNoDataError
-
-    provider = _new_provider(tmp_path)
-
-    with (
-        patch.object(provider, "_resolve_tile_url", return_value="https://example.invalid/tile.tif"),
-        patch.object(rioxarray, "open_rasterio", return_value=_three_band_tile()),
-        patch.object(
-            provider.vdatum,
-            "get_robust_mllw_to_navd88_offset",
-            side_effect=VDatumNoDataError("outside model"),
+            side_effect=AssertionError("BlueTopo must not be datum shifted"),
         ),
     ):
-        assert provider.load_tile_as_da("TILE_T", (-72.0, 41.0, -71.99, 41.01)) is None
+        ds = provider.load_tile_as_da("TILE_T", (-72.0, 41.0, -71.99, 41.01))
+
+    assert ds is not None
+    assert np.allclose(ds["elevation"].values, -5.0)
+    assert ds.attrs.get("vertical_datum") == "NAVD88"
+    assert "vdatum_offset" not in ds.attrs
