@@ -435,7 +435,11 @@ def fuse(
         return _zarr_zip_response(ds_out)
 
     buf = BytesIO()
-    ds["elevation"].rio.to_raster(buf, driver="GTiff")
+    elevation = ds["elevation"]
+    if elevation.rio.crs is None:
+        elevation = elevation.rio.write_crs(_policy.crs)
+    elevation = elevation.rio.write_nodata(np.nan)
+    elevation.rio.to_raster(buf, driver="GTiff")
     return Response(content=buf.getvalue(), media_type="image/tiff")
 
 
@@ -499,7 +503,11 @@ def fuse_post(
         return _zarr_zip_response(ds_out)
 
     buf = BytesIO()
-    ds["elevation"].rio.to_raster(buf, driver="GTiff")
+    elevation = ds["elevation"]
+    if elevation.rio.crs is None:
+        elevation = elevation.rio.write_crs(_policy.crs)
+    elevation = elevation.rio.write_nodata(np.nan)
+    elevation.rio.to_raster(buf, driver="GTiff")
     return Response(content=buf.getvalue(), media_type="image/tiff")
 
 
