@@ -8,7 +8,6 @@ bathymetry from modern surveys. It handles S3 access, tile resolution via RAT, a
 import contextlib
 import json
 import logging
-import math
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
@@ -17,7 +16,6 @@ import geopandas as gpd
 import requests  # type: ignore
 import rioxarray
 import xarray as xr
-from affine import Affine
 from filelock import FileLock
 from rioxarray.merge import merge_arrays
 from shapely.geometry import Point, box
@@ -30,7 +28,12 @@ from .base import (
     Provider,
     ProviderFetchError,
     ProviderNoDataError,
+    align_to_grid,
+    choose_resampling,
+    grid_for_bounds,
+    ground_resolution_m,
     interpolate_small_gaps,
+    merge_by_priority,
     sanitize_elevation_nodata,
     source_uid,
 )
@@ -258,6 +261,24 @@ class NoaaBlueTopoProvider(Provider):
             logger.warning(f"{label} Tile alignment check failed: {e}")
             return False
 
+    def _share_grid(self, tiles: list[xr.Dataset]) -> bool:
+        """True when every tile has the same CRS, transform and shape."""
+        try:
+            ref = tiles[0]["elevation"]
+            ref_crs = self._dataset_crs(tiles[0])
+            for ds in tiles[1:]:
+                elev = ds["elevation"]
+                if elev.shape != ref.shape or ds["source_id"].shape != elev.shape:
+                    return False
+                if not elev.rio.transform().almost_equals(ref.rio.transform()):
+                    return False
+                ds_crs = self._dataset_crs(ds)
+                if not ref_crs or not ds_crs or ds_crs.to_string() != ref_crs.to_string():
+                    return False
+            return True
+        except Exception:
+            return False
+
     def _align_tiles_to_reference_grid(self, tiles: list[xr.Dataset], label: str = "") -> list[xr.Dataset]:
         """Align all tiles to the first tile's grid to avoid merge seamline gaps."""
         if not tiles:
@@ -318,7 +339,12 @@ class NoaaBlueTopoProvider(Provider):
         resolution: float,
         label: str = "",
     ) -> list[xr.Dataset]:
-        """Reproject all tiles onto an explicit shared grid (most robust)."""
+        """Reproject all tiles onto an explicit shared grid (most robust).
+
+        Elevation goes through `align_to_grid`, bilinear or average by the tile's
+        resolution relative to the grid, so no-data does not bleed across tile edges;
+        source ids use nearest.
+        """
         if not tiles:
             return tiles
 
@@ -328,47 +354,30 @@ class NoaaBlueTopoProvider(Provider):
             logger.warning(f"{label} Could not import rasterio Resampling. Skipping grid alignment.")
             return tiles
 
-        west, south, east, north = bounds
-
-        if target_crs.upper() == "EPSG:4326":
-            mid_lat = (north + south) / 2.0
-            meters_per_deg_lat = 110540.0
-            meters_per_deg_lon = 111320.0 * max(math.cos(math.radians(mid_lat)), 1.0e-6)
-            res_x = resolution / meters_per_deg_lon
-            res_y = resolution / meters_per_deg_lat
-        else:
-            res_x = resolution
-            res_y = resolution
-
         # Add a padding halo so neighboring reprojected tiles overlap and avoid seam gaps.
         # Measured seamline gaps in WLIS zoom-13 tiles are typically 4 pixels.
-        pad_px = self._TARGET_GRID_PAD_PX
-        west -= res_x * pad_px
-        east += res_x * pad_px
-        south -= res_y * pad_px
-        north += res_y * pad_px
-
-        width = max(1, math.ceil((east - west) / res_x))
-        height = max(1, math.ceil((north - south) / res_y))
-
-        transform = Affine.translation(west, north) * Affine.scale(res_x, -res_y)
+        transform, (height, width) = grid_for_bounds(
+            bounds, target_crs, resolution, pad_px=self._TARGET_GRID_PAD_PX
+        )
+        mid_lat = (bounds[1] + bounds[3]) / 2.0
 
         aligned: list[xr.Dataset] = []
         for i, ds in enumerate(tiles):
             try:
                 ds = self._ensure_dataset_spatial_ref(ds)
 
-                aligned_elev = ds["elevation"].rio.reproject(
-                    target_crs,
-                    transform=transform,
-                    shape=(height, width),
-                    resampling=Resampling.bilinear,
+                tile_res = ground_resolution_m(
+                    ds["elevation"].rio.transform(), self._dataset_crs(ds), mid_lat
                 )
-                aligned_src = ds["source_id"].rio.reproject(
+                aligned_elev = align_to_grid(
+                    ds["elevation"],
                     target_crs,
-                    transform=transform,
-                    shape=(height, width),
-                    resampling=Resampling.nearest,
+                    transform,
+                    (height, width),
+                    choose_resampling(tile_res, resolution),
+                )
+                aligned_src = align_to_grid(
+                    ds["source_id"], target_crs, transform, (height, width), Resampling.nearest
                 )
                 aligned_src = aligned_src.fillna(0).astype("uint32")
 
@@ -701,13 +710,25 @@ class NoaaBlueTopoProvider(Provider):
                     f"Alignment check: {'PASS' if alignment_ok else 'WARN'}"
                 )
 
-                # Merge arrays natively puts last element on top
-                elevs = [ds["elevation"] for ds in das]
-                sources = [ds["source_id"] for ds in das]
-
-                final_elev = merge_arrays(elevs)
-                final_elev = sanitize_elevation_nodata(final_elev, abs_valid_limit=100000.0)
-                final_src = merge_arrays(sources)
+                # Tiles arrive in sorted tile-id order. When they share one grid (the
+                # usual case after alignment) the first valid value wins each pixel and
+                # source_id follows it; otherwise merge_arrays (method "first", grid of
+                # the first tile) is still deterministic for a fixed tile order.
+                if self._share_grid(das):
+                    shared = merge_by_priority(
+                        [
+                            xr.Dataset({"elevation": ds["elevation"], "source_id": ds["source_id"]})
+                            for ds in das
+                        ]
+                    )
+                    final_elev = sanitize_elevation_nodata(shared["elevation"], abs_valid_limit=100000.0)
+                    final_src = shared["source_id"]
+                else:
+                    elevs = [ds["elevation"] for ds in das]
+                    sources = [ds["source_id"] for ds in das]
+                    final_elev = merge_arrays(elevs)
+                    final_elev = sanitize_elevation_nodata(final_elev, abs_valid_limit=100000.0)
+                    final_src = merge_arrays(sources)
 
                 # Validate merged result
                 merged_ds = xr.Dataset({"elevation": final_elev, "source_id": final_src})
@@ -1028,7 +1049,9 @@ class NoaaBlueTopoProvider(Provider):
                     results.append(str(row[col]))
                     break
 
-        return list(set(results))
+        # Sorted, not set order: string hashing is salted per process, so set order
+        # (and with it the tile merge order) would otherwise change between runs.
+        return sorted(set(results))
 
     def _get_tile_url_from_cache(self, tile_id: str) -> str | None:
         """Read tile_id→url from disk cache. No lock needed on read."""
