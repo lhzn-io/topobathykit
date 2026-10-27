@@ -29,7 +29,13 @@ from topobathykit.policy.loader import (
     load_policy_from_str,
 )
 from topobathykit.policy.schema import OperatorType
-from topobathykit.providers.base import ProviderNoDataError, despike_median_deviation
+from topobathykit.providers.base import (
+    ProviderNoDataError,
+    align_to_grid,
+    choose_resampling,
+    despike_median_deviation,
+    ground_resolution_m,
+)
 from topobathykit.providers.registry import registry
 
 from .config import get_cache_root
@@ -77,6 +83,19 @@ def _get_grid_cells(
             cells.append((cell_min_lon, cell_min_lat, cell_max_lon, cell_max_lat))
 
     return cells, grid_size
+
+
+def _on_canvas(aligned: xr.DataArray, canvas: xr.DataArray) -> xr.DataArray:
+    """Give an array resampled onto the canvas grid the canvas's exact coordinates.
+
+    The resampled coordinates are recomputed from the transform and can differ from
+    the canvas's rounded ones in the last bits, which would make xarray align the two
+    by an inner join instead of pixel by pixel (reproject_match did the same).
+    """
+    aligned = aligned.compute()
+    return aligned.assign_coords(
+        {aligned.rio.x_dim: canvas["x"].values, aligned.rio.y_dim: canvas["y"].values}
+    )
 
 
 def _run_cell(
@@ -162,6 +181,17 @@ def _run_cell(
     xs = np.round(xs, 8)
     ys = np.round(ys, 8)
 
+    # Providers are asked for the ground resolution of one canvas cell. An EPSG:3857
+    # cell of `resolution` nominal metres spans resolution * cos(lat) ground metres,
+    # so requesting `resolution` itself would return a grid about 1.33x coarser than
+    # the canvas at 41N and leave the canvas to duplicate every third or fourth row.
+    cell_center_lat = (min_lat + max_lat) / 2.0
+    if CRS(target_crs).to_epsg() == 3857:
+        fetch_resolution_m = input_resolution_meters * float(np.cos(np.radians(cell_center_lat)))
+    else:
+        fetch_resolution_m = input_resolution_meters
+    canvas_ground_m = ground_resolution_m(transform, target_crs, cell_center_lat)
+
     elevation = xr.DataArray(
         data=np.full((height, width), np.nan, dtype=np.float32),
         coords={"y": ys, "x": xs},
@@ -226,7 +256,7 @@ def _run_cell(
                 # Fetch using the expanded halo bbox to ensure we grab edge data
                 fetched_data = provider_instance.fetch_layer(
                     fetch_bbox,
-                    resolution=input_resolution_meters,
+                    resolution=fetch_resolution_m,
                     crs="EPSG:4326",
                     filter=step.filter.model_dump() if step.filter else {},
                 )
@@ -312,7 +342,18 @@ def _run_cell(
                     ):
                         fetched_data = fetched_data.drop_duplicates(dim=dim)
 
-                aligned_data = fetched_data.rio.reproject_match(elevation).compute()
+                # Resample onto the canvas grid explicitly. Nearest (the reproject_match
+                # default) duplicates source rows and columns whenever the source is
+                # coarser than the canvas, and drops source pixels when it is finer.
+                # align_to_grid keeps no-data from bleeding across coverage edges.
+                source_ground_m = ground_resolution_m(
+                    fetched_data.rio.transform(), fetched_data.rio.crs, cell_center_lat
+                )
+                resampling = choose_resampling(source_ground_m, canvas_ground_m)
+                aligned_data = _on_canvas(
+                    align_to_grid(fetched_data, target_crs, transform, (height, width), resampling),
+                    elevation,
+                )
 
             except Exception as e:
                 logger.error(f"Reprojection/Index Alignment failed for {step.provider}: {e}")
@@ -344,9 +385,12 @@ def _run_cell(
                 try:
                     from rasterio.enums import Resampling
 
-                    aligned_source_id = provider_source_id_da.rio.reproject_match(
-                        elevation, resampling=Resampling.nearest
-                    ).compute()
+                    aligned_source_id = _on_canvas(
+                        align_to_grid(
+                            provider_source_id_da, target_crs, transform, (height, width), Resampling.nearest
+                        ),
+                        elevation,
+                    )
                     # Squeeze any spurious band dimension introduced by reproject
                     if "band" in aligned_source_id.dims:
                         aligned_source_id = aligned_source_id.squeeze("band", drop=True)
