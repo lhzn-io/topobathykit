@@ -151,7 +151,7 @@ If you add tests that require network access or large external downloads, mark t
 2. Create a feature branch.
 3. Make changes with small, reviewable commits.
 4. Add/extend tests.
-5. Update docs (README, policies/README, provider docs) as needed.
+5. Update docs (README, example policies under `policies/examples/`, provider docs) as needed.
 6. Open a Pull Request describing:
    - what changed
    - how to test

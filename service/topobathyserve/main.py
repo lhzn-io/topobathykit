@@ -35,7 +35,7 @@ from topobathykit import config as topobathykit_config
 from topobathykit.config import get_cache_root
 from topobathykit.policy.loader import hash_policy, load_policy, load_policy_from_str
 from topobathykit.quality import calculate_spatial_stats
-from topobathykit.runtime import hydrate, run, should_consolidate
+from topobathykit.runtime import FUSION_ALGO_VERSION, hydrate, run, should_consolidate
 
 from . import job_state
 
@@ -193,6 +193,20 @@ def _normalize_output_format(format_raw: str) -> str:
     if fmt in {"zarr", "zip"}:
         return "zarr"
     raise HTTPException(status_code=400, detail=f"Unsupported format '{format_raw}'")
+
+
+def _tile_cache_key(
+    policy_path: Path, vmin: float | None, vmax: float | None, tile_size: int
+) -> tuple[str, str]:
+    """Return (params_str, param_hash) naming a rendered tile in the tile cache.
+
+    The fusion algorithm version is part of the key, so tiles rendered from cells
+    fused by an older algorithm are not served after an upgrade.
+    """
+    import hashlib
+
+    params_str = f"{policy_path.name}|{vmin}|{vmax}|{tile_size}|fusion_algo={FUSION_ALGO_VERSION}"
+    return params_str, hashlib.md5(params_str.encode()).hexdigest()[:8]
 
 
 def _json_safe(value: Any) -> Any:
@@ -1064,7 +1078,6 @@ def get_tile_metadata(
     Returns metadata for a specific fused tile (XYZ).
     """
     import datetime
-    import hashlib
 
     n = 2.0**z
     west = x / n * 360.0 - 180.0
@@ -1078,8 +1091,7 @@ def get_tile_metadata(
 
     # Check Cache existence
     base_cache_dir = get_cache_root() / "tiles"
-    params_str = f"{policy_path.name}|{vmin}|{vmax}|{tile_size}"
-    param_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
+    params_str, param_hash = _tile_cache_key(policy_path, vmin, vmax, tile_size)
 
     # Check NPY (data) first
     npy_path = base_cache_dir / "data" / str(z) / str(x) / f"{y}_{param_hash}.npy"
@@ -1143,7 +1155,6 @@ def get_tile_pixel_source(
     Requires the PNG tile to have been generated first (reads the ``_src.npz`` sidecar
     written alongside the PNG cache file).
     """
-    import hashlib
     import json
 
     earth_r = 6378137.0
@@ -1167,8 +1178,7 @@ def get_tile_pixel_source(
     base_cache_dir = get_cache_root() / "tiles"
     safe_style = "".join(c for c in style if c.isalnum() or c in ("-", "_")) or "default"
     tile_dir = base_cache_dir / "visual" / safe_style / str(z) / str(x)
-    params_str = f"{policy_path.name}|{vmin}|{vmax}|{tile_size}"
-    param_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
+    _params_str, param_hash = _tile_cache_key(policy_path, vmin, vmax, tile_size)
 
     src_npz_path = tile_dir / f"{y}_{param_hash}_src.npz"
     if not src_npz_path.exists():
@@ -1257,11 +1267,9 @@ def get_xyz_tile(
         tile_dir = base_cache_dir / "raw" / str(z) / str(x)
         ext = "tif" if format == "tiff" else format
 
-    # Hash unique parameters (Policy, VMin/Max) to handle different renderings of same tile
-    params_str = f"{policy_path.name}|{vmin}|{vmax}|{tile_size}"
-    import hashlib
-
-    param_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
+    # Hash unique parameters (Policy, VMin/Max, fusion algorithm) to handle different
+    # renderings of same tile
+    _params_str, param_hash = _tile_cache_key(policy_path, vmin, vmax, tile_size)
 
     tile_dir.mkdir(parents=True, exist_ok=True)
     tile_path = tile_dir / f"{y}_{param_hash}.{ext}"

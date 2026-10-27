@@ -663,7 +663,10 @@ def _gather_status_data() -> _StatusData:
                 if phash not in d.fused_policies:
                     yaml_snippet = None
                     if phash != "legacy":
-                        # Look for either strictly {phash}.yaml or glob *.{phash}.yaml
+                        # Look for either strictly {phash}.yaml or glob *.{phash}.yaml.
+                        # get_fused_cache_info names the policy file after the cache
+                        # directory (policy content plus fusion algorithm version), so
+                        # directories from every algorithm version find their policy.
                         yaml_path = policies_root / f"{phash}.yaml"
                         yaml_match = None
 

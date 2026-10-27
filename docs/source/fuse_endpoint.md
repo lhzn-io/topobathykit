@@ -186,8 +186,13 @@ key is a SHA256 hash of the policy content + bbox + resolution, so:
 - Two requests with the same custom YAML hit the same cache entry.
 - A custom policy request never collides with a default policy request.
 - Modifying a single line in the YAML produces a different cache key.
+- A new fusion algorithm version (`topobathykit.runtime.FUSION_ALGO_VERSION`)
+  also produces new keys, so cells fused by an older release are rebuilt
+  rather than served. Each cell records it as the `fusion_algo_version` attribute.
 
-Cached results live at `~/.cache/topobathykit/fused_zarr/{hash}.zarr`.
+Cached results live at `~/.cache/topobathykit/fused_zarr/{policy}/{cell}.zarr`,
+where `{policy}` is a short hash of the policy content and the fusion algorithm
+version, and `{cell}` a hash of that plus the cell bbox, resolution and CRS.
 
 ## Error Handling
 
