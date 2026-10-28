@@ -12,13 +12,23 @@ import requests  # type: ignore
 import rioxarray
 import xarray as xr
 from rioxarray.exceptions import NoDataInBounds, OneDimensionalRaster
-from rioxarray.merge import merge_arrays
 from shapely.geometry import box
 
 from ..config import get_cache_root
 from ..runtime import should_consolidate
 from ..vdatum import VDatumNoDataError, VDatumResolver
-from .base import Provider, ProviderFetchError, ProviderNoDataError, sanitize_elevation_nodata, source_uid
+from .base import (
+    Provider,
+    ProviderFetchError,
+    ProviderNoDataError,
+    align_to_grid,
+    choose_resampling,
+    grid_for_bounds,
+    ground_resolution_m,
+    merge_by_priority,
+    sanitize_elevation_nodata,
+    source_uid,
+)
 from .registry import registry
 
 logger = logging.getLogger(__name__)
@@ -174,13 +184,15 @@ class NoaaTopobathyProvider(Provider):
 
         logger.info(f"Topobathy fetch: Found {len(pids)} overlapping projects. Processing...")
 
-        project_layers = []
         provenance_dict: dict[int, dict[str, str]] = {}
         # Tiles or projects lost to errors (as opposed to no coverage). The runtime
         # refuses to cache a cell when this is non-zero, so the loss is retried.
         fetch_errors: list[str] = []
 
-        # 2. Process Each Project
+        # 2. Fetch Each Project's Tiles
+        # Merging waits until every tile is in hand, so that all tiles of all projects
+        # can be resampled onto one shared grid first (step 3).
+        fetched: list[tuple[str, list[xr.DataArray]]] = []
         for pid in pids:
             try:
                 # OPTIMIZATION: Check if all expected tiles for this project are already in Zarr cache.
@@ -198,7 +210,6 @@ class NoaaTopobathyProvider(Provider):
                 if not tiles:
                     continue
 
-                # Fetch & Merge Tiles for this Project
                 project_das = []
                 for t in tiles:
                     try:
@@ -227,84 +238,19 @@ class NoaaTopobathyProvider(Provider):
                         if da.size == 0:
                             continue
 
-                        # Reproject if needed
-                        if crs and da.rio.crs and da.rio.crs != crs:
-                            try:
-                                reproj_knn = {}
-                                if resolution and "EPSG:4326" not in crs:
-                                    reproj_knn["resolution"] = resolution
-                                da = da.rio.reproject(crs, **reproj_knn)
-                            except Exception as e:
-                                logger.warning(f"Reprojection failed for tile {t}: {e}")
-                                fetch_errors.append(f"{pid}/{t}: reproject {type(e).__name__}: {e}")
-                                continue
-
                         project_das.append(da)
                     except Exception as e:
                         logger.warning(f"Failed to fetch tile {t}: {type(e).__name__}: {e}")
                         fetch_errors.append(f"{pid}/{t}: {type(e).__name__}: {e}")
 
                 if project_das:
-                    # Merge tiles for this project
-                    # Default is last-on-top, but for a single project tiles shouldn't overlap much
-                    try:
-                        p_merged = merge_arrays(project_das)
-                        p_merged = self._sanitize_nodata_values(p_merged)
-
-                        # Extract Provenance info
-                        try:
-                            project_uid = source_uid("noaa_topobathy", int(pid))
-                        except ValueError:
-                            project_uid = source_uid("noaa_topobathy", pid)
-
-                        project_name = self._projects.get(pid, f"Project {pid}")
-
-                        # Try to find resolution in spatial index
-                        res_str = "Unknown"
-                        if (
-                            self._spatial_index is not None
-                            and "resolution_meters" in self._spatial_index.columns
-                        ):
-                            try:
-                                project_ids = self._spatial_index["project_id"].astype(str)
-                                row = self._spatial_index[project_ids == str(pid)]
-                                if not row.empty:
-                                    val = row.iloc[0]["resolution_meters"]
-                                    if val is not None:
-                                        import numpy as np
-
-                                        if not np.isnan(val):
-                                            res_str = f"{float(val):.2f}m"
-                            except Exception:
-                                pass
-
-                        provenance_dict[project_uid] = {
-                            "name": project_name,
-                            "provider": "noaa_topobathy",
-                            "resolution": res_str,
-                        }
-
-                        p_merged.name = "elevation"
-                        p_source = xr.where(p_merged.notnull(), project_uid, 0).astype(np.uint32)
-                        p_source.name = "source_id"
-                        p_source = p_source.rio.write_nodata(0)
-                        p_source.attrs["_FillValue"] = 0
-
-                        p_ds = xr.Dataset({"elevation": p_merged, "source_id": p_source})
-                        # carry over spatial attributes
-                        p_ds = p_ds.rio.write_crs(p_merged.rio.crs)
-                        p_ds = p_ds.rio.write_transform(p_merged.rio.transform())
-
-                        project_layers.append(p_ds)
-                    except Exception as e:
-                        logger.warning(f"Failed to merge tiles for project {pid}: {type(e).__name__}: {e}")
-                        fetch_errors.append(f"{pid}: merge {type(e).__name__}: {e}")
+                    fetched.append((pid, project_das))
 
             except Exception as e:
                 logger.warning(f"Failed to process project {pid}: {type(e).__name__}: {e}")
                 fetch_errors.append(f"{pid}: {type(e).__name__}: {e}")
 
-        if not project_layers:
+        if not fetched:
             if fetch_errors:
                 # Coverage exists but every contributing tile or project failed; this
                 # is not a genuine no-data result and must not be cached as one.
@@ -313,24 +259,102 @@ class NoaaTopobathyProvider(Provider):
                     f"first: {fetch_errors[0]}"
                 )
             raise ProviderNoDataError(f"No valid data returned from {len(pids)} projects for bbox {bbox}")
+
+        # 3. One Explicit Grid
+        # Every tile of every project is resampled onto the same grid before merging.
+        # merge_arrays over differing grids takes its output grid from the first input
+        # and resamples the rest with nearest, so the result depended on tile order.
+        # The grid covers the fetch bbox at the requested ground resolution (the
+        # finest tile's resolution when none is given), in the requested CRS.
+        grid_crs = crs or "EPSG:4326"
+        grid_bounds = (west, south, east, north) if str(grid_crs).upper() == "EPSG:4326" else bbox
+        mid_lat = (south + north) / 2.0
+        if resolution:
+            grid_res = float(resolution)
+        else:
+            grid_res = min(
+                ground_resolution_m(da.rio.transform(), da.rio.crs, mid_lat)
+                for _, das in fetched
+                for da in das
+            )
+        grid_transform, grid_shape = grid_for_bounds(grid_bounds, grid_crs, grid_res)
+
+        project_layers = []
+        for pid, project_das in fetched:
+            try:
+                # Merge tiles for this project: first tile (sorted by name) wins any overlap
+                aligned_tiles = []
+                for da in project_das:
+                    tile_res = ground_resolution_m(da.rio.transform(), da.rio.crs, mid_lat)
+                    aligned = align_to_grid(
+                        da, grid_crs, grid_transform, grid_shape, choose_resampling(tile_res, grid_res)
+                    )
+                    aligned_tiles.append(xr.Dataset({"elevation": aligned}))
+                p_merged = merge_by_priority(aligned_tiles)["elevation"]
+                p_merged = self._sanitize_nodata_values(p_merged)
+
+                # Extract Provenance info
+                try:
+                    project_uid = source_uid("noaa_topobathy", int(pid))
+                except ValueError:
+                    project_uid = source_uid("noaa_topobathy", pid)
+
+                project_name = self._projects.get(pid, f"Project {pid}")
+
+                # Try to find resolution in spatial index
+                res_str = "Unknown"
+                if self._spatial_index is not None and "resolution_meters" in self._spatial_index.columns:
+                    try:
+                        project_ids = self._spatial_index["project_id"].astype(str)
+                        row = self._spatial_index[project_ids == str(pid)]
+                        if not row.empty:
+                            val = row.iloc[0]["resolution_meters"]
+                            if val is not None and not np.isnan(val):
+                                res_str = f"{float(val):.2f}m"
+                    except Exception:
+                        pass
+
+                provenance_dict[project_uid] = {
+                    "name": project_name,
+                    "provider": "noaa_topobathy",
+                    "resolution": res_str,
+                }
+
+                p_merged.name = "elevation"
+                p_source = xr.where(p_merged.notnull(), project_uid, 0).astype(np.uint32)
+                p_source.name = "source_id"
+                p_source = p_source.rio.write_nodata(0)
+                p_source.attrs["_FillValue"] = 0
+
+                p_ds = xr.Dataset({"elevation": p_merged, "source_id": p_source})
+                # carry over spatial attributes
+                p_ds = p_ds.rio.write_crs(grid_crs)
+                p_ds = p_ds.rio.write_transform(grid_transform)
+
+                project_layers.append(p_ds)
+            except Exception as e:
+                logger.warning(f"Failed to merge tiles for project {pid}: {type(e).__name__}: {e}")
+                fetch_errors.append(f"{pid}: merge {type(e).__name__}: {e}")
+
+        if not project_layers:
+            raise ProviderFetchError(
+                f"NOAA Topobathy fetch failed for bbox {bbox} with {len(fetch_errors)} error(s); "
+                f"first: {fetch_errors[0]}"
+            )
         if fetch_errors:
             logger.warning(
                 f"NOAA Topobathy returned partial data for bbox {bbox}: {len(fetch_errors)} error(s); "
                 f"first: {fetch_errors[0]}"
             )
 
-        # 3. Merge Projects
-        # project_layers is ordered [Best, ..., Worst]
-        # rioxarray's merge_arrays defaults to method='first', so the FIRST element takes precedence.
-        # Thus, passing the list directly [Best, ..., Worst] ensures Best is on top.
-        elevs = [ds["elevation"] for ds in project_layers]
-        sources = [ds["source_id"] for ds in project_layers]
+        # 4. Merge Projects
+        # project_layers is ordered [Best, ..., Worst] and shares one grid, so the best
+        # project with a valid value wins each pixel, and source_id follows it.
+        merged = merge_by_priority(project_layers)
+        final_elev = self._sanitize_nodata_values(merged["elevation"])
+        final_src = merged["source_id"]
 
-        final_elev = merge_arrays(elevs)
-        final_elev = self._sanitize_nodata_values(final_elev)
-        final_src = merge_arrays(sources)
-
-        # 4. Final Clip
+        # 5. Final Clip
         with contextlib.suppress(Exception):
             final_elev = final_elev.rio.clip_box(
                 minx=west,
@@ -1023,10 +1047,14 @@ class NoaaTopobathyProvider(Provider):
                 # 3. Recency (Year)
                 # candidates["year_computed"] is already there
 
-                # 4. Sort by Explicit List > Name > Year > Datum
+                # 4. Sort by Explicit List > Name > Year > Datum, then project id so that
+                # ties (common: same year and datum) resolve the same way on every run
+                # instead of following the spatial index's row order.
+                candidates["pid_key"] = candidates["project_id"].astype(str)
                 candidates = candidates.sort_values(
-                    by=["explicit_score", "name_score", "year_computed", "datum_score"],
-                    ascending=[False, False, False, False],
+                    by=["explicit_score", "name_score", "year_computed", "datum_score", "pid_key"],
+                    ascending=[False, False, False, False, True],
+                    kind="stable",
                 )
 
                 # Return list of IDs
@@ -1253,7 +1281,9 @@ class NoaaTopobathyProvider(Provider):
                     fname += ".tif"  # Append extension if missing
                 results.append(fname)
 
-        return list(set(results))
+        # Sorted, not set order: string hashing is salted per process, so set order
+        # (and with it the tile merge order) would otherwise change between runs.
+        return sorted(set(results))
 
     def fetch_tile(
         self,

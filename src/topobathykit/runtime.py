@@ -29,7 +29,13 @@ from topobathykit.policy.loader import (
     load_policy_from_str,
 )
 from topobathykit.policy.schema import OperatorType
-from topobathykit.providers.base import ProviderNoDataError, despike_median_deviation
+from topobathykit.providers.base import (
+    ProviderNoDataError,
+    align_to_grid,
+    choose_resampling,
+    despike_median_deviation,
+    ground_resolution_m,
+)
 from topobathykit.providers.registry import registry
 
 from .config import get_cache_root
@@ -39,6 +45,24 @@ from .operators.blend import metric_feather, overwrite
 logging.getLogger("rasterio.session").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+# Version of the fusion algorithm: canvas alignment, resampling and provider merge
+# order. It is folded into the fused cache key (and so the cache directory) and
+# written to every cached cell as `fusion_algo_version`, so cells computed by an
+# older algorithm are never served for the same policy. Bump it whenever a change
+# alters the pixels a given policy produces.
+#   1: implicit (no attribute); nearest-neighbour canvas alignment.
+#   2: ground-resolution fetch, bilinear/average alignment, deterministic merges,
+#      BAG surveys ordered newest first.
+FUSION_ALGO_VERSION = 2
+
+
+def _cache_algo_matches(attrs: dict[str, Any]) -> bool:
+    """True when a cached cell was written by the current fusion algorithm."""
+    try:
+        return int(attrs.get("fusion_algo_version", -1)) == FUSION_ALGO_VERSION
+    except (TypeError, ValueError):
+        return False
 
 
 def should_consolidate() -> bool:
@@ -77,6 +101,19 @@ def _get_grid_cells(
             cells.append((cell_min_lon, cell_min_lat, cell_max_lon, cell_max_lat))
 
     return cells, grid_size
+
+
+def _on_canvas(aligned: xr.DataArray, canvas: xr.DataArray) -> xr.DataArray:
+    """Give an array resampled onto the canvas grid the canvas's exact coordinates.
+
+    The resampled coordinates are recomputed from the transform and can differ from
+    the canvas's rounded ones in the last bits, which would make xarray align the two
+    by an inner join instead of pixel by pixel (reproject_match did the same).
+    """
+    aligned = aligned.compute()
+    return aligned.assign_coords(
+        {aligned.rio.x_dim: canvas["x"].values, aligned.rio.y_dim: canvas["y"].values}
+    )
 
 
 def _run_cell(
@@ -162,6 +199,17 @@ def _run_cell(
     xs = np.round(xs, 8)
     ys = np.round(ys, 8)
 
+    # Providers are asked for the ground resolution of one canvas cell. An EPSG:3857
+    # cell of `resolution` nominal metres spans resolution * cos(lat) ground metres,
+    # so requesting `resolution` itself would return a grid about 1.33x coarser than
+    # the canvas at 41N and leave the canvas to duplicate every third or fourth row.
+    cell_center_lat = (min_lat + max_lat) / 2.0
+    if CRS(target_crs).to_epsg() == 3857:
+        fetch_resolution_m = input_resolution_meters * float(np.cos(np.radians(cell_center_lat)))
+    else:
+        fetch_resolution_m = input_resolution_meters
+    canvas_ground_m = ground_resolution_m(transform, target_crs, cell_center_lat)
+
     elevation = xr.DataArray(
         data=np.full((height, width), np.nan, dtype=np.float32),
         coords={"y": ys, "x": xs},
@@ -226,7 +274,7 @@ def _run_cell(
                 # Fetch using the expanded halo bbox to ensure we grab edge data
                 fetched_data = provider_instance.fetch_layer(
                     fetch_bbox,
-                    resolution=input_resolution_meters,
+                    resolution=fetch_resolution_m,
                     crs="EPSG:4326",
                     filter=step.filter.model_dump() if step.filter else {},
                 )
@@ -312,7 +360,18 @@ def _run_cell(
                     ):
                         fetched_data = fetched_data.drop_duplicates(dim=dim)
 
-                aligned_data = fetched_data.rio.reproject_match(elevation).compute()
+                # Resample onto the canvas grid explicitly. Nearest (the reproject_match
+                # default) duplicates source rows and columns whenever the source is
+                # coarser than the canvas, and drops source pixels when it is finer.
+                # align_to_grid keeps no-data from bleeding across coverage edges.
+                source_ground_m = ground_resolution_m(
+                    fetched_data.rio.transform(), fetched_data.rio.crs, cell_center_lat
+                )
+                resampling = choose_resampling(source_ground_m, canvas_ground_m)
+                aligned_data = _on_canvas(
+                    align_to_grid(fetched_data, target_crs, transform, (height, width), resampling),
+                    elevation,
+                )
 
             except Exception as e:
                 logger.error(f"Reprojection/Index Alignment failed for {step.provider}: {e}")
@@ -344,9 +403,12 @@ def _run_cell(
                 try:
                     from rasterio.enums import Resampling
 
-                    aligned_source_id = provider_source_id_da.rio.reproject_match(
-                        elevation, resampling=Resampling.nearest
-                    ).compute()
+                    aligned_source_id = _on_canvas(
+                        align_to_grid(
+                            provider_source_id_da, target_crs, transform, (height, width), Resampling.nearest
+                        ),
+                        elevation,
+                    )
                     # Squeeze any spurious band dimension introduced by reproject
                     if "band" in aligned_source_id.dims:
                         aligned_source_id = aligned_source_id.squeeze("band", drop=True)
@@ -566,11 +628,19 @@ def get_fused_cache_info(
     # We hash the policy content digest itself to keep the key short but content-addressed
     policy_content_hash = hash_policy(policy.model_dump())
 
-    # Save policy to cache if it doesn't exist
+    # The cache directory is named after the policy content AND the fusion algorithm
+    # version, so cells fused by an older algorithm live in a different directory and
+    # are never read or overwritten for the same policy. hash_policy() itself stays a
+    # pure function of the policy, as policy identity elsewhere (logs, the policy_hash
+    # cell attribute) does not change with the algorithm.
+    cache_dir_hash = hash_policy({**policy.model_dump(), "_fusion_algo": FUSION_ALGO_VERSION})
+
+    # Save policy to cache if it doesn't exist. The file is named after the cache
+    # directory so cache tooling can pair the two.
     policies_dir = cache_dir.parent / "policies"
     policies_dir.mkdir(parents=True, exist_ok=True)
     safe_name = "".join(c for c in getattr(policy, "name", "Unnamed") if c.isalnum()) or "Unnamed"
-    short_hash = policy_content_hash[:8]
+    short_hash = cache_dir_hash[:8]
     policy_cache_path = policies_dir / f"{safe_name}.{short_hash}.yaml"
     if not policy_cache_path.exists():
         import yaml
@@ -587,6 +657,7 @@ def get_fused_cache_info(
 
     key_dict = {
         "policy_hash": policy_content_hash,
+        "fusion_algo": FUSION_ALGO_VERSION,
         "cell": [round(x, 8) for x in bbox],
         "res": quantized_res,
         "crs": target_crs,
@@ -674,6 +745,7 @@ def hydrate(
     # Determine Grid Cells
     cells, grid_cell_size = _get_grid_cells(bbox, target_crs)
     legend = generate_provider_legend(policy)
+    policy_content_hash = hash_policy(policy.model_dump())
 
     stats = {"total": len(cells), "cached": 0, "processed": 0, "failed": 0}
     if on_progress:
@@ -703,8 +775,11 @@ def hydrate(
                 # But we double check legend just in case of collisions or old data.
                 cached_legend = ds_meta.attrs.get("policy_legend")
                 valid_legend = not (cached_legend and cached_legend != str(legend))
+                valid_algo = _cache_algo_matches(ds_meta.attrs)
+                if not valid_algo:
+                    logger.info(f"Fusion algorithm mismatch for {cache_path.name}. Rebuilding.")
 
-                if valid_grid and valid_legend:
+                if valid_grid and valid_legend and valid_algo:
                     is_cached = True
 
                 ds_meta.close()
@@ -745,7 +820,9 @@ def hydrate(
                 return "failed"
 
             new_attrs: dict[str, object] = {
-                "policy_hash": key_hash,
+                "policy_hash": policy_content_hash,
+                "cache_key": key_hash,
+                "fusion_algo_version": FUSION_ALGO_VERSION,
                 "policy_legend": str(legend),
                 "grid_cell_size": grid_cell_size,
                 "crs": target_crs,
@@ -906,13 +983,17 @@ def run(
             resolution=resolution if resolution else 30.0,
         )
         if use_cache and cache_path.exists():
-            logger.info(f"Fast Path Cache Hit: {cache_path.name}")
             ds = cast(xr.Dataset, xr.open_dataset(cache_path, engine="zarr", decode_coords="all").load())
-            # Restore `provenance_dict` from its serialised form so a cache hit
-            # exposes the same attributes as a freshly computed result.
-            if "provenance_dict" not in ds.attrs:
-                ds.attrs["provenance_dict"] = _collect_provenance([ds])
-            return ds
+            if _cache_algo_matches(ds.attrs):
+                logger.info(f"Fast Path Cache Hit: {cache_path.name}")
+                # Restore `provenance_dict` from its serialised form so a cache hit
+                # exposes the same attributes as a freshly computed result.
+                if "provenance_dict" not in ds.attrs:
+                    ds.attrs["provenance_dict"] = _collect_provenance([ds])
+                return ds
+            # Written by another fusion algorithm: fall through and rebuild the cell.
+            logger.info(f"Fusion algorithm mismatch for {cache_path.name}. Rebuilding.")
+            ds.close()
 
     start_lon, start_lat, end_lon, end_lat = bbox
 
@@ -947,6 +1028,7 @@ def run(
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     legend = generate_provider_legend(policy)
+    policy_content_hash = hash_policy(policy.model_dump())
 
     # Process all cells
     cell_datasets = []
@@ -971,6 +1053,10 @@ def run(
                 # If cached grid size doesn't match current logic, invalidate
                 if not valid_grid:
                     logger.info(f"Cache Grid Mismatch for {cache_path.name}. Invalidating.")
+                    ds_cell = None
+                elif not _cache_algo_matches(ds_cell.attrs):
+                    logger.info(f"Fusion algorithm mismatch for {cache_path.name}. Invalidating.")
+                    ds_cell.close()
                     ds_cell = None
                 else:
                     # Clean up random dimensions
@@ -1001,7 +1087,9 @@ def run(
 
             # Attributes
             new_attrs: dict[str, object] = {
-                "policy_hash": hash_policy(policy.model_dump()),  # type: ignore
+                "policy_hash": policy_content_hash,
+                "cache_key": key_hash,
+                "fusion_algo_version": FUSION_ALGO_VERSION,
                 "policy_legend": str(legend),
                 "grid_cell_size": grid_cell_size,
                 "crs": target_crs,
@@ -1206,7 +1294,8 @@ def run(
     # Add combined attributes (provenance was collected before the mosaic freed
     # the cell list).
     merged_ds.attrs = {
-        "policy_hash": hash_policy(policy.model_dump()),  # type: ignore
+        "policy_hash": policy_content_hash,
+        "fusion_algo_version": FUSION_ALGO_VERSION,
         "policy_legend": str(legend),
         "crs": target_crs,
         "mosaiced_from_cells": len(cells),

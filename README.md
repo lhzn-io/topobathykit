@@ -118,9 +118,9 @@ from topobathykit.runtime import run
 
 # bbox = (west, south, east, north)
 ds = run(
-    policy_path="policies/global_default.yaml",
+    "policies/examples/wlis.yaml",
     bbox=(-74.05, 40.65, -73.70, 40.95),
-    variables=["elevation"],
+    resolution=30.0,
 )
 
 print(ds)
@@ -158,18 +158,13 @@ For cache sizing and practical runtime expectations, see the documentation page:
 
 ## Policy preset gallery
 
-Policy presets live in `policies/`:
+Example policies live in `policies/examples/`:
 
-- `policies/global_default.yaml`
-  Global basemap fusion (coarse but robust). Good for quick demos and worldwide coverage.
+- `policies/examples/wlis.yaml`
+  US coastal topobathy fusion in EPSG:3857: GEBCO as the global base, then USGS 3DEP and lidar on land, NCEI CUDEM, BlueTopo, NOAA topobathy lidar and NCEI BAG surveys where available, each overwriting the layers below.
 
-- `policies/iconic/great_barrier_reef.yaml`
-  Demonstrates how to overlay a high-resolution regional dataset (GBR100) on top of the global basemap and feather edges smoothly.
-
-- (Northeast US) presets
-  Examples that prioritize BAG + topobathy lidar + BlueTopo/CUDEM where available.
-
-See `policies/README.md` for details, expected coverage, and suggested bounding boxes.
+- `policies/examples/gbr_overlay.yaml`
+  Overlays a high-resolution regional dataset (GBR100, about 100 m) on the global GEBCO basemap with a 500 m metric feather, in EPSG:4326.
 
 ## Output contract (data-first)
 
@@ -217,7 +212,7 @@ If you have domain expertise for a region, you can encode it as a policy preset:
 
 - `docs/source/` — API, methodology, CLI tools
 - `docs/planning/roadmap.md` — roadmap (including time-varying covariates and Sentinel plans)
-- `policies/README.md` — policy presets and how to run iconic demos
+- `policies/examples/`: example policies
 
 ## Built with agentic engineering
 

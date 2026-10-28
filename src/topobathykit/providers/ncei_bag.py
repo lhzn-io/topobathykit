@@ -71,6 +71,64 @@ def _parse_survey_id(filename: str) -> str:
     return m.group(1).upper() if m else filename
 
 
+def _bag_entry_from_url(url: str, date: int | None = None, res: float | None = None) -> dict[str, Any]:
+    """Discovery entry for a BAG URL; resolution parsed from the filename when not given."""
+    return {
+        "url": url,
+        "res": float(res) if res is not None else _parse_bag_resolution(url.split("/")[-1]),
+        "date": date,
+    }
+
+
+def _bag_entry(item: Any) -> dict[str, Any] | None:
+    """Normalise one discovery cache item to {url, res, date}.
+
+    Current entries are dicts. Entries cached before survey dates were stored are
+    bare URL strings; they load with date None (unknown).
+    """
+    if isinstance(item, str):
+        return _bag_entry_from_url(item)
+    if isinstance(item, dict) and isinstance(item.get("url"), str):
+        date = item.get("date")
+        res = item.get("res")
+        try:
+            date = int(date) if date is not None else None
+        except (TypeError, ValueError):
+            date = None
+        try:
+            res = float(res) if res is not None else None
+        except (TypeError, ValueError):
+            res = None
+        return _bag_entry_from_url(item["url"], date=date, res=res)
+    return None
+
+
+def order_bags_newest_first(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order BAG entries for a first-valid-wins merge: newest survey first, then finest.
+
+    Entries with a known survey end date come first, by date descending, then
+    resolution ascending, then filename descending. Entries with an unknown date
+    (legacy URL-only cache entries, or no date in the NCEI record) follow, in the
+    order used before dates were recorded: resolution ascending, then filename
+    (survey id) descending as a recency proxy within one resolution. Survey ids of
+    different series (H, W, F, ...) are not comparable in time, so they do not
+    outrank resolution there.
+    """
+
+    def _fname(e: dict[str, Any]) -> str:
+        return str(e["url"]).split("/")[-1].lower()
+
+    dated = [e for e in entries if e.get("date") is not None]
+    undated = [e for e in entries if e.get("date") is None]
+    # Stable multi-pass sorts: least significant key first.
+    dated = sorted(dated, key=_fname, reverse=True)
+    dated = sorted(dated, key=lambda e: float(e["res"]))
+    dated = sorted(dated, key=lambda e: -int(e["date"]))
+    undated = sorted(undated, key=_fname, reverse=True)
+    undated = sorted(undated, key=lambda e: float(e["res"]))
+    return dated + undated
+
+
 def _dedup_survey_resolutions(urls: list[str], target_resolution: float | None = None) -> list[str]:
     """NOAA often splits surveys spatially based on depth, generating different resolutions
     for each depth bin (e.g. 50cm for 0-20m depth, 2m for >40m depth).
@@ -506,6 +564,14 @@ class BAGDiscovery:
     # See: manage_discovery_cache.py --invalidate ncei_bag
     DISCOVERY_CACHE_PATH = get_cache_root() / "ncei_bag" / "discovery_cache.json"
 
+    # Entries carrying survey dates are cached under "<bbox key>|v2"; the bare bbox
+    # key holds the older URL-only lists, which earlier releases keep reading.
+    DISCOVERY_KEY_SUFFIX = "|v2"
+
+    # url -> {url, res, date} for every BAG seen by discovery in this process, so the
+    # merge order can use survey dates where only URLs are passed along.
+    _bag_meta: ClassVar[dict[str, dict[str, Any]]] = {}
+
     @classmethod
     def _read_bag_cached(cls, local_path: Path) -> xr.DataArray | None:
         """
@@ -563,14 +629,17 @@ class BAGDiscovery:
             logger.warning(f"Failed to update redirect cache: {e}")
 
     @classmethod
-    def _get_from_discovery_cache(cls, bbox_key: str) -> list[str] | None:
+    def _get_from_discovery_cache(cls, bbox_key: str) -> list[dict[str, Any]] | None:
         """
-        Read bbox→BAG URL list from the disk discovery cache.
+        Read bbox→BAG entries ({url, res, date}) from the disk discovery cache.
 
         Lock-free on read; the write side uses ``FileLock`` for safety.
         Returns ``None`` on a cache miss so the caller can fall back to the
         network query and then populate the cache via
         :meth:`_update_discovery_cache`.
+
+        Entries written before survey dates were cached are plain URL strings; they
+        are returned with an unknown date (see :func:`_bag_entry`).
 
         To force a fresh lookup (e.g. after NCEI publishes new surveys), delete
         ``DISCOVERY_CACHE_PATH`` or run
@@ -582,14 +651,29 @@ class BAGDiscovery:
             with open(cls.DISCOVERY_CACHE_PATH) as f:
                 data = json.load(f)
             result = data.get(bbox_key)
-            return list(result) if isinstance(result, list) else None
+            if not isinstance(result, list):
+                return None
+            return [e for e in (_bag_entry(item) for item in result) if e is not None]
         except Exception:
             return None
 
     @classmethod
-    def _update_discovery_cache(cls, bbox_key: str, urls: list[str]) -> None:
+    def _remember(cls, entries: list[dict[str, Any]]) -> None:
+        """Record survey dates by URL so fetch_bag and fetch_layer can order by recency."""
+        for e in entries:
+            known = cls._bag_meta.get(e["url"])
+            if known is None or (known.get("date") is None and e.get("date") is not None):
+                cls._bag_meta[e["url"]] = e
+
+    @classmethod
+    def entry_for(cls, url: str) -> dict[str, Any]:
+        """Discovery entry for a URL: the remembered one, else parsed from the filename."""
+        return cls._bag_meta.get(url) or _bag_entry_from_url(url)
+
+    @classmethod
+    def _update_discovery_cache(cls, bbox_key: str, urls: list[Any]) -> None:
         """
-        Persist a bbox→BAG URL list to the disk discovery cache atomically.
+        Persist a bbox→BAG entry list to the disk discovery cache atomically.
 
         Uses ``FileLock`` to prevent concurrent writes from multiple worker
         processes from corrupting the JSON file.  Empty result lists are also
@@ -599,7 +683,7 @@ class BAGDiscovery:
             cls.DISCOVERY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
             lock_path = cls.DISCOVERY_CACHE_PATH.parent / (cls.DISCOVERY_CACHE_PATH.name + ".lock")
             with FileLock(lock_path):
-                data: dict[str, list[str]] = {}
+                data: dict[str, list[Any]] = {}
                 if cls.DISCOVERY_CACHE_PATH.exists():
                     try:
                         with open(cls.DISCOVERY_CACHE_PATH) as f:
@@ -813,14 +897,24 @@ class BAGDiscovery:
 
         crs_tag = crs.replace(":", "_")
         bbox_key = f"{round(swest, 4)}_{round(ssouth, 4)}_{round(seast, 4)}_{round(snorth, 4)}_{crs_tag}"
+        dated_key = bbox_key + cls.DISCOVERY_KEY_SUFFIX
 
-        # 1. Check disk cache (survives server restarts and process recycling) (Fast Path)
-        cached = cls._get_from_discovery_cache(bbox_key)
+        def _urls(entries: list[dict[str, Any]]) -> list[str]:
+            cls._remember(entries)
+            urls = [e["url"] for e in order_bags_newest_first(entries)]
+            if target_resolution and urls:
+                return _dedup_survey_resolutions(urls, target_resolution)
+            return urls
+
+        # 1. Check disk cache (survives server restarts and process recycling) (Fast Path).
+        # Only entries with survey dates count as a hit. A bbox known only from a
+        # URL-only legacy entry is queried again once to pick up the dates; the legacy
+        # list remains the fallback if that query fails.
+        cached = cls._get_from_discovery_cache(dated_key)
         if cached is not None:
             logger.debug(f"BAG Discovery Cache Hit: {bbox_key} ({len(cached)} urls)")
-            if target_resolution and cached:
-                return _dedup_survey_resolutions(cached, target_resolution)
-            return cached
+            return _urls(cached)
+        legacy = cls._get_from_discovery_cache(bbox_key)
 
         # 2. Cache Miss - Synchronization Barrier
         # Use a granular file lock to prevent cache stampedes query the same bbox simultaneously.
@@ -828,18 +922,16 @@ class BAGDiscovery:
         lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = lock_dir / f"{bbox_key}.lock"
 
-        found_urls: list[str] = []
+        found_entries: list[dict[str, Any]] = []
         query_succeeded = False
 
         try:
             with FileLock(lock_path):
                 # Double-check cache inside lock (in case another process just finished)
-                cached = cls._get_from_discovery_cache(bbox_key)
+                cached = cls._get_from_discovery_cache(dated_key)
                 if cached is not None:
                     logger.debug(f"BAG Discovery Cache Hit (Post-Lock): {bbox_key}")
-                    if target_resolution and cached:
-                        return _dedup_survey_resolutions(cached, target_resolution)
-                    return cached
+                    return _urls(cached)
 
                 logger.debug(f"BAG Discovery Cache Miss: {bbox_key} — querying NCEI ArcGIS API")
 
@@ -894,9 +986,8 @@ class BAGDiscovery:
             if "features" in data:
                 import re
 
-                # Collect valid BAGs with their sort key (Resolution, Date)
-                # Primary Sort: Resolution (Ascending, so 0.5 < 1.0)
-                # Secondary Sort: Date (Descending, so Newest first)
+                # Collect valid BAGs with their resolution and survey date; they are
+                # ordered by order_bags_newest_first (newest survey, then finest).
                 found_bags: list[tuple[str, float, int]] = []  # (URL, Resolution, DateTimestamp)
 
                 for feature in data["features"]:
@@ -954,21 +1045,17 @@ class BAGDiscovery:
                             found_bags.append((url, res_final, sort_date))
                             logger.debug(f"Discovered BAG: {fname} | Res: {res_final}m | Date: {sort_date}")
 
-                # Sort:
-                # 1. Resolution ASC (Smallest = Best)
-                # 2. Date DESC (Largest = Newest = Best) -> Use negative
-                found_bags.sort(key=lambda x: (x[1], -x[2]))
+                # One entry per URL. A record without a date keeps date None so that
+                # it orders after dated surveys rather than as the oldest one.
+                by_url: dict[str, dict[str, Any]] = {}
+                for url, res_final, sort_date in found_bags:
+                    entry = _bag_entry_from_url(url, date=sort_date or None, res=res_final)
+                    known = by_url.get(url)
+                    if known is None or (entry["date"] or 0) > (known["date"] or 0):
+                        by_url[url] = entry
+                found_entries = order_bags_newest_first(list(by_url.values()))
 
-                # Extract just the URLs for compatibility
-                # Deduplicate while preserving order
-                seen = set()
-                found_urls = []
-                for url, _, _ in found_bags:
-                    if url not in seen:
-                        found_urls.append(url)
-                        seen.add(url)
-
-            logger.info(f"Found {len(found_urls)} BAGs in BBox (Sorted by Date).")
+            logger.info(f"Found {len(found_entries)} BAGs in BBox (newest survey first).")
 
         except Exception as e:
             logger.warning(f"BBox query failed: {e}")
@@ -977,17 +1064,19 @@ class BAGDiscovery:
         # Avoid caching transient network failures as permanent empty results.
         if query_succeeded:
             # Re-acquire lock for writing? No, _update_discovery_cache handles its own locking.
-            cls._update_discovery_cache(bbox_key, found_urls)
-            logger.debug(f"BAG Discovery Cache Created: {bbox_key} ({len(found_urls)} urls persisted)")
+            cls._update_discovery_cache(dated_key, found_entries)
+            logger.debug(f"BAG Discovery Cache Created: {bbox_key} ({len(found_entries)} urls persisted)")
         else:
             logger.warning(f"BAG Discovery Cache Skipped: {bbox_key} (query failed)")
+            if legacy is not None:
+                logger.info(
+                    f"BAG discovery: using cached URL-only list for {bbox_key} (survey dates unknown)"
+                )
+                return _urls(legacy)
 
         # Apply survey dedup at discovery layer so pruned tiles are never
         # fetched, file-locked, or loaded into memory.
-        if target_resolution and found_urls:
-            found_urls = _dedup_survey_resolutions(found_urls, target_resolution)
-
-        return found_urls
+        return _urls(found_entries)
 
 
 class BAGProvider(Provider):
@@ -1054,32 +1143,17 @@ class BAGProvider(Provider):
         if not urls:
             raise ProviderNoDataError(f"No BAG files found for bbox {bbox}")
 
-        # 1.6 Re-sort by (resolution ASC, survey_id DESC) before processing.
-        # The discovery cache may store URLs in NCEI API order (arbitrary) if
-        # populated before sorting was introduced, or on a cache hit which bypasses
-        # the sort at write time. Since the merge is first-in-list-wins (fill-NaN-only),
-        # sort order here determines which survey wins overlapping pixels — finest
-        # resolution must come first. Survey filename DESC is a reliable recency proxy
-        # within the same resolution (higher NOAA survey numbers are more recent).
-        import re as _re
-
-        def _resolution_from_url(u: str) -> float:
-            fname = u.split("/")[-1].lower()
-            m = _re.search(r"[._-](\d+(?:\.\d+)?)cm[._-]", fname)
-            if m:
-                return float(m.group(1)) / 100.0
-            m = _re.search(r"[._-](\d+(?:\.\d+)?)m[._-]", fname)
-            if m:
-                return float(m.group(1))
-            return 100.0  # unknown resolution → lowest priority
-
-        # Two-pass stable sort: secondary key first, then primary (Python stable sort preserves order).
-        urls = sorted(urls, key=lambda u: u.split("/")[-1].lower(), reverse=True)  # survey id DESC
-        # resolution ASC (stable: preserves secondary within ties)
-        urls = sorted(urls, key=_resolution_from_url)
+        # 1.6 Re-sort newest survey first, then finest, before processing.
+        # The merge is first-in-list-wins (fill-NaN-only), so this order decides which
+        # survey wins overlapping pixels: a newer survey supersedes an older one where
+        # both have data, and within one survey the finer depth band wins. Survey dates
+        # come from discovery; URLs without a known date (legacy cache entries) follow,
+        # finest first and survey id descending (see order_bags_newest_first). The sort
+        # is repeated here because discovery results may come from any cache path.
+        urls = [e["url"] for e in order_bags_newest_first([BAGDiscovery.entry_for(u) for u in urls])]
 
         logger.info(
-            f"BAG fetch: {len(urls)} files (sorted finest-first): "
+            f"BAG fetch: {len(urls)} files (sorted newest survey first): "
             + ", ".join(u.split("/")[-1] for u in urls[:5])
             + ("..." if len(urls) > 5 else "")
         )
@@ -1379,7 +1453,8 @@ class BAGProvider(Provider):
         # Normalize to list
         urls = [download_url] if isinstance(download_url, str) else download_url
 
-        loaded_arrays = []
+        loaded_arrays: list[xr.DataArray] = []
+        loaded_urls: list[str] = []
 
         for url in urls:
             filename = url.split("/")[-1]
@@ -1400,6 +1475,7 @@ class BAGProvider(Provider):
 
             if da is not None:
                 loaded_arrays.append(da)
+                loaded_urls.append(url)
 
         if not loaded_arrays:
             return None
@@ -1411,9 +1487,17 @@ class BAGProvider(Provider):
         try:
             from rioxarray.merge import merge_arrays
 
-            # Sort by resolution (finest first) to preserve detail
-            # abs(res[0]) is pixel width. Smallest pixel width = highest resolution.
-            loaded_arrays.sort(key=lambda da: abs(da.rio.resolution()[0]))
+            # Same order as fetch_layer: newest survey first, then finest (abs(res[0])
+            # is pixel width), then URL for a stable order. Segments of one survey
+            # share a date, so this is finest first within a survey.
+            def _priority(item: tuple[str, xr.DataArray]) -> tuple[int, int, float, str]:
+                url, da = item
+                date = BAGDiscovery.entry_for(url).get("date")
+                return (0 if date is not None else 1, -int(date or 0), abs(da.rio.resolution()[0]), url)
+
+            loaded_arrays = [
+                da for _, da in sorted(zip(loaded_urls, loaded_arrays, strict=True), key=_priority)
+            ]
 
             logger.info(f"Merging {len(loaded_arrays)} BAG segments for {survey_id}")
             # merge_arrays returns a DataArray by default if inputs are DataArrays

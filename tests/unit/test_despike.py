@@ -95,28 +95,35 @@ SPIKE = -193.0
 
 
 class _SpikedSeabed(Provider):
-    """A flat -8 m seabed with one deep pixel at the centre of whatever it is asked for."""
+    """A flat -8 m seabed with a two-pixel deep spike near the centre of the request.
+
+    The grid is the runtime's EPSG:4326 canvas grid itself (resolution / 111320 degree
+    cells snapped to multiples of the cell size), so canvas alignment is an identity
+    whatever resampling it uses, and the spike reaches the canvas as exactly the two
+    pixels it occupies here: the Mount Sinai case at 30 m.
+    """
 
     def fetch_layer(self, bbox: Any, resolution: Any = None, crs: str = "EPSG:4326", **kw: Any) -> Any:
         min_lon, min_lat, max_lon, max_lat = bbox
-        n = 21
-        res_x = (max_lon - min_lon) / n
-        res_y = (max_lat - min_lat) / n
-        z = np.full((n, n), -8.0, dtype=np.float32)
-        # 3x3 source pixels, so nearest resampling onto the canvas cannot miss it.
-        z[n // 2 - 1 : n // 2 + 2, n // 2 - 1 : n // 2 + 2] = SPIKE
+        res = float(resolution) / 111320.0
+        x0 = int(np.floor(min_lon / res))
+        x1 = int(np.ceil(max_lon / res))
+        y0 = int(np.floor(min_lat / res))
+        y1 = int(np.ceil(max_lat / res))
+        nx, ny = x1 - x0, y1 - y0
+        z = np.full((ny, nx), -8.0, dtype=np.float32)
+        z[ny // 2, nx // 2] = SPIKE
+        z[ny // 2 - 1, nx // 2] = SPIKE + 32.0
         da = xr.DataArray(
             z,
             coords={
-                "y": np.linspace(max_lat - res_y / 2, min_lat + res_y / 2, n),
-                "x": np.linspace(min_lon + res_x / 2, max_lon - res_x / 2, n),
+                "y": (np.arange(y1 - 1, y0 - 1, -1) + 0.5) * res,
+                "x": (np.arange(x0, x1) + 0.5) * res,
             },
             dims=("y", "x"),
         )
         da.rio.write_crs(crs, inplace=True)
-        da.rio.write_transform(
-            Affine.translation(min_lon, max_lat) * Affine.scale(res_x, -res_y), inplace=True
-        )
+        da.rio.write_transform(Affine.translation(x0 * res, y1 * res) @ Affine.scale(res, -res), inplace=True)
         return da
 
     def get_metadata(self) -> dict[str, Any]:
@@ -159,7 +166,7 @@ def test_run_cell_despikes_when_max_deviation_is_set(tmp_path: Path) -> None:
     ds, outcome = _run(_policy(tmp_path, "it_spiked", {"max_deviation": 20.0}))
     assert float(ds["elevation"].min()) > -9.0
     assert outcome["status"] == "ok"
-    assert outcome["despiked"] >= 1
+    assert outcome["despiked"] == 2
 
 
 def test_run_cell_does_not_refilter_ncei_bag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

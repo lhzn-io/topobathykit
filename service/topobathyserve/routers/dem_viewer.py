@@ -899,8 +899,10 @@ def _list_datasets_sync(root: Path, source_filter: str | set[str] | None = None)
 
         for _res_key, group in res_groups.items():
             first_attrs = group[0][1]
-            # Use directory name as the stable policy identifier, NOT the per-cell
-            # policy_hash attr (which includes cell bbox and is unique per cell).
+            # Use directory name as the stable dataset identifier, NOT the per-cell
+            # policy_hash attr. The directory is named after the policy content and
+            # the fusion algorithm version, so the same policy fused by two algorithm
+            # versions appears as two datasets.
             policy_hash = policy_dir.name
             dx = first_attrs.get("_dx", 0)
             dy = first_attrs.get("_dy", 0)
@@ -944,6 +946,8 @@ def _list_datasets_sync(root: Path, source_filter: str | set[str] | None = None)
                         "bbox": union_bbox,
                         "policy_legend": cluster[0][1].get("policy_legend", ""),
                         "source": cluster[0][1].get("source", "hydrate"),
+                        # Cells written before the attribute existed are version 1.
+                        "fusion_algo_version": int(cluster[0][1].get("fusion_algo_version", 1)),
                     }
                 )
 

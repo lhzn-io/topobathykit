@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any, cast
 
 import numpy as np
+import rioxarray  # noqa: F401
 import xarray as xr
 from pyproj import Transformer
 
@@ -153,6 +154,209 @@ def despike_median_deviation(
         return da, 0
     cleaned = np.where(spikes, np.nan, da.values)
     return cast(xr.DataArray, da.copy(data=cleaned)), n
+
+
+# --- Grid alignment -----------------------------------------------------------------
+
+# Metres per degree used to convert between ground and geographic resolution. The
+# same constants size the BlueTopo target grid and the runtime canvas.
+METERS_PER_DEG_LON_EQUATOR = 111320.0
+METERS_PER_DEG_LAT = 110540.0
+
+# A source at least this many times finer than the target cell is block-averaged
+# onto it; anything coarser or similar is interpolated bilinearly. Below 1.5x a
+# target cell spans at most two source pixels per axis, which bilinear already
+# weighs; above it, bilinear would sample a few source pixels and alias the rest.
+AVERAGE_RESAMPLING_RATIO = 1.5
+
+# Fraction of a target cell that valid source pixels must cover, under average
+# resampling, for the cell to be valid. 0.5 matches the footprint that nearest
+# resampling gives, so coverage edges neither grow nor shrink by more than half a cell.
+MIN_VALID_FRACTION = 0.5
+
+
+def _is_mercator(crs_obj: Any) -> bool:
+    """True when a projected CRS is a Mercator variant (scale grows as 1 / cos(lat))."""
+    try:
+        if crs_obj.to_epsg() in (3857, 3395, 900913):
+            return True
+        op = crs_obj.coordinate_operation
+        return op is not None and "mercator" in op.method_name.lower()
+    except Exception:
+        return False
+
+
+def ground_resolution_m(transform: Any, crs: Any, lat: float) -> float:
+    """Approximate ground size in metres of one pixel of a grid, at latitude `lat`.
+
+    Returns the geometric mean of the x and y pixel sizes. Geographic grids are
+    converted with the METERS_PER_DEG constants; Mercator grids are scaled by
+    cos(lat), since their nominal metres exceed ground metres away from the equator.
+    """
+    import math
+
+    from pyproj import CRS
+
+    crs_obj = CRS.from_user_input(crs)
+    if crs_obj.is_compound and crs_obj.sub_crs_list:
+        crs_obj = crs_obj.sub_crs_list[0]
+    dx = abs(float(transform.a))
+    dy = abs(float(transform.e))
+    coslat = max(math.cos(math.radians(lat)), 1.0e-6)
+    if crs_obj.is_geographic:
+        gx = dx * METERS_PER_DEG_LON_EQUATOR * coslat
+        gy = dy * METERS_PER_DEG_LAT
+    else:
+        try:
+            unit = float(crs_obj.axis_info[0].unit_conversion_factor)
+        except (IndexError, AttributeError, TypeError):
+            unit = 1.0
+        gx = dx * unit
+        gy = dy * unit
+        if _is_mercator(crs_obj):
+            gx *= coslat
+            gy *= coslat
+    return math.sqrt(gx * gy)
+
+
+def choose_resampling(source_m: float, target_m: float) -> Any:
+    """Pick the resampling for elevation going from `source_m` to `target_m` pixels.
+
+    Average when the source is at least AVERAGE_RESAMPLING_RATIO times finer than the
+    target, bilinear otherwise. Integer ids (source_id) always use nearest instead.
+    """
+    from rasterio.enums import Resampling
+
+    if source_m > 0 and target_m / source_m >= AVERAGE_RESAMPLING_RATIO:
+        return Resampling.average
+    return Resampling.bilinear
+
+
+def grid_for_bounds(
+    bounds: tuple[float, float, float, float],
+    crs: str,
+    resolution_m: float,
+    pad_px: int = 0,
+) -> tuple[Any, tuple[int, int]]:
+    """Return (transform, (height, width)) of a north-up grid covering `bounds`.
+
+    `bounds` (west, south, east, north) and the grid are in `crs`. `resolution_m` is
+    a ground resolution in metres; for a geographic CRS it is converted to degrees
+    at the mid latitude of the bounds. `pad_px` adds that many cells on every side.
+    """
+    import math
+
+    from affine import Affine
+    from pyproj import CRS
+
+    west, south, east, north = bounds
+    if CRS.from_user_input(crs).is_geographic:
+        mid_lat = (north + south) / 2.0
+        res_x = resolution_m / (METERS_PER_DEG_LON_EQUATOR * max(math.cos(math.radians(mid_lat)), 1.0e-6))
+        res_y = resolution_m / METERS_PER_DEG_LAT
+    else:
+        res_x = resolution_m
+        res_y = resolution_m
+
+    west -= res_x * pad_px
+    east += res_x * pad_px
+    south -= res_y * pad_px
+    north += res_y * pad_px
+
+    width = max(1, math.ceil((east - west) / res_x))
+    height = max(1, math.ceil((north - south) / res_y))
+    transform = Affine.translation(west, north) @ Affine.scale(res_x, -res_y)
+    return transform, (height, width)
+
+
+def _strip_nodata(da: xr.DataArray) -> xr.DataArray:
+    """Copy of `da` with every nodata marker removed, so GDAL treats all values as data."""
+    out = da.copy()
+    out.attrs.pop("_FillValue", None)
+    out.attrs.pop("missing_value", None)
+    out.encoding.pop("_FillValue", None)
+    out.encoding.pop("missing_value", None)
+    return cast(xr.DataArray, out.rio.write_nodata(None, encoded=False))
+
+
+def align_to_grid(
+    da: xr.DataArray,
+    crs: Any,
+    transform: Any,
+    shape: tuple[int, int],
+    resampling: Any = None,
+) -> xr.DataArray:
+    """Resample `da` onto the grid (crs, transform, shape) without no-data bleeding.
+
+    Nearest resampling is a plain reproject, used for integer ids. For elevation
+    (bilinear, cubic, average, ...) NaN is declared as the source nodata, so GDAL
+    weighs only valid pixels, and the result is then masked by the source validity
+    carried onto the same grid:
+
+    - interpolating kernels keep a cell only where nearest-resampled validity is set,
+      so the valid footprint is exactly the one nearest resampling would give;
+    - average keeps a cell only where valid source pixels cover at least
+      MIN_VALID_FRACTION of it.
+
+    Either way coverage edges do not grow into no-data, and no-data never pulls
+    values towards a fill value.
+    """
+    from rasterio.enums import Resampling
+
+    if resampling is None:
+        resampling = Resampling.bilinear
+    height, width = shape
+    grid_kw: dict[str, Any] = {"transform": transform, "shape": (height, width)}
+
+    if resampling == Resampling.nearest:
+        return cast(xr.DataArray, da.rio.reproject(crs, resampling=Resampling.nearest, **grid_kw))
+
+    src = da if np.issubdtype(da.dtype, np.floating) else da.astype(np.float32)
+    valid = src.notnull()
+    nodata = da.rio.nodata
+    if nodata is not None and not np.isnan(nodata):
+        valid = valid & (src != nodata)
+    src = _strip_nodata(src.where(valid)).rio.write_nodata(np.nan, encoded=False)
+
+    out = src.rio.reproject(crs, resampling=resampling, nodata=np.nan, **grid_kw)
+
+    mask_src = _strip_nodata(src.copy(data=valid.values.astype(np.float32)))
+    if resampling == Resampling.average:
+        frac = mask_src.rio.reproject(crs, resampling=Resampling.average, nodata=0.0, **grid_kw)
+        keep = frac.fillna(0.0) >= MIN_VALID_FRACTION
+    else:
+        nn = mask_src.rio.reproject(crs, resampling=Resampling.nearest, nodata=0.0, **grid_kw)
+        keep = nn.fillna(0.0) > 0.5
+
+    return cast(xr.DataArray, out.copy(data=np.where(keep.values, out.values, np.nan).astype(out.dtype)))
+
+
+def merge_by_priority(layers: list[xr.Dataset], var: str = "elevation") -> xr.Dataset:
+    """Merge datasets that share one grid; the first layer with a valid `var` wins each pixel.
+
+    Every other variable follows the winner of `var`, so a source id always
+    describes the elevation beside it. The result does not depend on anything but
+    the order of `layers`, unlike a merge over differing grids.
+    """
+    if not layers:
+        raise ValueError("merge_by_priority needs at least one layer")
+    first = layers[0]
+    if len(layers) == 1:
+        return first.copy(deep=True)
+    # Plain numpy copies: assigning into .values of a dask-backed array is lost.
+    arrays = {str(name): np.array(first[name].values, copy=True) for name in first.data_vars}
+    shape = arrays[var].shape
+    for layer in layers[1:]:
+        layer_var = np.asarray(layer[var].values)
+        if layer_var.shape != shape:
+            raise ValueError(f"merge_by_priority: layer shape {layer_var.shape} != {shape}")
+        fill = np.isnan(arrays[var]) & np.isfinite(layer_var)
+        if not fill.any():
+            continue
+        for name, arr in arrays.items():
+            if name in layer.data_vars:
+                arr[fill] = np.asarray(layer[name].values)[fill]
+    return first.copy(data=arrays)
 
 
 # Per-pixel source ids. Each provider owns a disjoint block of SOURCE_ID_BLOCK

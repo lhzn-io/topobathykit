@@ -51,8 +51,8 @@ The entry point ``run(policy_path, bbox)`` orchestrates the entire process:
 
 1.  **Canvas Initialization**: Creates a blank ``xarray.Dataset`` covering the requested BBox in the Policy's CRS.
 2.  **Step Execution**: Iterates through policy steps.
-3.  **Data Fetching**: Calls ``provider.fetch_layer()``.
-4.  **Alignment**: Reprojects the fetched layer to match the Canvas pixel grid (using ``rio.reproject_match``).
+3.  **Data Fetching**: Calls ``provider.fetch_layer()`` at the ground resolution of one canvas cell (``resolution * cos(lat)`` for an EPSG:3857 canvas).
+4.  **Alignment**: Resamples the fetched layer onto the Canvas pixel grid with ``providers.base.align_to_grid``: bilinear, or average when the source is at least 1.5 times finer than the canvas, masked by the source's valid footprint so no-data does not bleed. Source ids use nearest.
 5.  **Composition**: Applies the blening operator (Overwrite/Feather) to merge the aligned layer into the canvas.
 
 Providers (``topobathykit.providers``)
