@@ -209,6 +209,20 @@ def _tile_cache_key(
     return params_str, hashlib.md5(params_str.encode()).hexdigest()[:8]
 
 
+def _geotiff_response(elevation: xr.DataArray, policy_crs: str) -> Response:
+    """Encode fused elevation as a GeoTIFF with its CRS and NaN nodata tagged.
+
+    Datasets assembled from cached cells can arrive without a CRS, so the policy CRS
+    is written when the array has none. Neither tag is written back to the caller's array.
+    """
+    if elevation.rio.crs is None:
+        elevation = elevation.rio.write_crs(policy_crs)
+    elevation = elevation.rio.write_nodata(np.nan)
+    buf = BytesIO()
+    elevation.rio.to_raster(buf, driver="GTiff")
+    return Response(content=buf.getvalue(), media_type="image/tiff")
+
+
 def _json_safe(value: Any) -> Any:
     try:
         return json.loads(json.dumps(value, default=str))
@@ -448,9 +462,7 @@ def fuse(
         ds_out.attrs = _build_zarr_attrs(ds, bbox_tuple, resolution, policy_path.name)
         return _zarr_zip_response(ds_out)
 
-    buf = BytesIO()
-    ds["elevation"].rio.to_raster(buf, driver="GTiff")
-    return Response(content=buf.getvalue(), media_type="image/tiff")
+    return _geotiff_response(ds["elevation"], _policy.crs)
 
 
 @app.post("/fuse")
@@ -512,9 +524,7 @@ def fuse_post(
         ds_out.attrs = _build_zarr_attrs(ds, request.bbox, request.resolution, p_name)
         return _zarr_zip_response(ds_out)
 
-    buf = BytesIO()
-    ds["elevation"].rio.to_raster(buf, driver="GTiff")
-    return Response(content=buf.getvalue(), media_type="image/tiff")
+    return _geotiff_response(ds["elevation"], _policy.crs)
 
 
 # Visualization Constants
