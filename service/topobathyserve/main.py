@@ -209,18 +209,22 @@ def _tile_cache_key(
     return params_str, hashlib.md5(params_str.encode()).hexdigest()[:8]
 
 
-def _geotiff_response(elevation: xr.DataArray, policy_crs: str) -> Response:
+def _geotiff_bytes(elevation: xr.DataArray, policy_crs: str | None) -> bytes:
     """Encode fused elevation as a GeoTIFF with its CRS and NaN nodata tagged.
 
     Datasets assembled from cached cells can arrive without a CRS, so the policy CRS
     is written when the array has none. Neither tag is written back to the caller's array.
     """
-    if elevation.rio.crs is None:
+    if elevation.rio.crs is None and policy_crs is not None:
         elevation = elevation.rio.write_crs(policy_crs)
     elevation = elevation.rio.write_nodata(np.nan)
     buf = BytesIO()
     elevation.rio.to_raster(buf, driver="GTiff")
-    return Response(content=buf.getvalue(), media_type="image/tiff")
+    return buf.getvalue()
+
+
+def _geotiff_response(elevation: xr.DataArray, policy_crs: str) -> Response:
+    return Response(content=_geotiff_bytes(elevation, policy_crs), media_type="image/tiff")
 
 
 def _json_safe(value: Any) -> Any:
@@ -546,6 +550,9 @@ TILE_PADDING_PX = 4  # Standard padding to avoid edge artifacts and ensure cache
 # At high zoom (e.g. z=17, ~0.9m), each run() is CPU/IO-heavy; unbounded concurrency
 # causes all requests to compete and none to finish before client timeout.
 _FUSION_SEMAPHORE = threading.Semaphore(int(os.environ.get("TOPOBATHY_MAX_CONCURRENT_TILES", "3")))
+# Bumped when the bytes of cached GeoTIFF tiles change, so older tiles are not served.
+# 2: tiles carry a NaN nodata tag and the policy CRS when the dataset has none.
+GEOTIFF_TILE_VERSION = 2
 _TILE_FUSION_TIMEOUT = int(os.environ.get("TOPOBATHY_TILE_TIMEOUT", "120"))  # seconds
 
 
@@ -1275,7 +1282,7 @@ def get_xyz_tile(
     else:
         # Raw/Other Cache (TIFF): tiles/raw/{z}/{x}/
         tile_dir = base_cache_dir / "raw" / str(z) / str(x)
-        ext = "tif" if format == "tiff" else format
+        ext = f"gt{GEOTIFF_TILE_VERSION}.tif" if format == "tiff" else format
 
     # Hash unique parameters (Policy, VMin/Max, fusion algorithm) to handle different
     # renderings of same tile
@@ -1449,7 +1456,7 @@ def get_xyz_tile(
     if format == "png":
         if style == "source":
             # Generate Legend Map for Dynamic Coloring
-            from topobathykit.policy.loader import generate_provider_legend, load_policy
+            from topobathykit.policy.loader import generate_provider_legend
 
             # We have policy_path, but need the object.
             # load_policy is cached? Let's hope it's fast enough or LRU cached.
@@ -1490,9 +1497,6 @@ def get_xyz_tile(
         media_type = "application/octet-stream"
 
     else:  # TIFF
-        import io
-
-        buf = io.BytesIO()
         da_out = ds["elevation"]
 
         # Ensure proper dimension order (Band, Y, X) for GDAL
@@ -1501,9 +1505,8 @@ def get_xyz_tile(
             da_out = da_out.transpose("band", "y", "x")
             # If shape is (1, H, W) it's already fine
 
-        # Write to Raster
-        da_out.rio.to_raster(buf, driver="GTiff")
-        data = buf.getvalue()
+        policy_crs = load_policy(str(policy_path)).crs if da_out.rio.crs is None else None
+        data = _geotiff_bytes(da_out, policy_crs)
         media_type = "image/tiff"
 
     # 2. Write to Cache
