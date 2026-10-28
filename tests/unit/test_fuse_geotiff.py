@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 import numpy as np
@@ -12,7 +12,7 @@ from rasterio.io import MemoryFile
 from topobathyserve import main
 
 from topobathykit import runtime
-from topobathykit.policy.schema import CompositionStep, FusionPolicy, VariableStrategy
+from topobathykit.policy.schema import CompositionStep, FusionPolicy, OperatorType, VariableStrategy
 from topobathykit.providers.base import Provider
 from topobathykit.providers.registry import registry
 
@@ -27,14 +27,15 @@ class _ConstantProvider(Provider):
     ) -> xr.DataArray:
         west, south, east, north = bbox
         dx, dy = (east - west) / 20, (north - south) / 20
-        return xr.DataArray(
+        layer = xr.DataArray(
             np.full((20, 20), 5.0, dtype=np.float32),
             coords={
                 "x": np.linspace(west + dx / 2, east - dx / 2, 20),
                 "y": np.linspace(north - dy / 2, south + dy / 2, 20),
             },
             dims=("y", "x"),
-        ).rio.write_crs(crs)
+        )
+        return cast(xr.DataArray, layer.rio.write_crs(crs))
 
     def get_metadata(self) -> dict[str, Any]:
         return {"name": "constant"}
@@ -52,7 +53,7 @@ def test_fuse_geotiff_fresh_and_cached(
         variables=[
             VariableStrategy(
                 name="elevation",
-                steps=[CompositionStep(provider="geotiff_test", operation="overwrite")],
+                steps=[CompositionStep(provider="geotiff_test", operation=OperatorType.overwrite)],
             )
         ],
     )
