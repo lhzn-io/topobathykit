@@ -1732,7 +1732,12 @@ def _hydrate_subprocess(
 
 
 # Keep track of spawned subprocesses so we can join them on shutdown
-_HYDRATE_PROCESSES: dict[str, "multiprocessing.Process"] = {}
+_HYDRATE_PROCESSES: dict[str, "multiprocessing.process.BaseProcess"] = {}
+
+# Hydration jobs start with spawn, not the Linux default fork. A process forked after the
+# service has read zarr in-process (any /fuse) hangs on its first zarr read, and the job
+# process reads zarr for its cache checks. macOS already defaults to spawn.
+_HYDRATE_MP_CONTEXT = multiprocessing.get_context("spawn")
 
 
 @app.post("/hydrate")
@@ -1790,7 +1795,7 @@ async def trigger_hydrate(
     job_state.write_state(job_id, initial_state)
 
     # Spawn subprocess
-    proc = multiprocessing.Process(
+    proc = _HYDRATE_MP_CONTEXT.Process(
         target=_hydrate_subprocess,
         args=(
             job_id,
