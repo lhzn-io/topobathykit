@@ -5,11 +5,15 @@ topobathykit
 
 **topobathykit** is a policy-driven fusion runtime for seamless topobathymetric data products.
 
-.. figure:: _static/dem-viewer.png
-   :alt: topobathykit Screenshot
-   :align: center
+.. raw:: html
 
-   *High-fidelity 3D perspective of fused topobathymetric surfaces.*
+   <video autoplay loop muted playsinline controls width="100%"
+          poster="_static/northfork.png"
+          aria-label="Fused topobathymetry along the North Fork of Long Island in the 3D DEM viewer">
+     <source src="https://assets.longhorizon.eco/website-longhorizon-eco/topobathykit-northfork.mp4?v=20261020" type="video/mp4">
+   </video>
+
+*A 37 s flight along the North Fork of Long Island and out over the Race in the 3D DEM viewer. The readout names the source survey under the cursor, from per-pixel provenance.*
 
 .. toctree::
    :maxdepth: 2

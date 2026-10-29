@@ -3,7 +3,9 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/lhzn-io/topobathykit/blob/main/LICENSE)
 
-![topobathykit 3D DEM Viewer](https://raw.githubusercontent.com/lhzn-io/topobathykit/main/docs/source/_static/dem-viewer.png)
+[![Fused topobathymetry of the Race, at the eastern end of Long Island Sound, in the topobathykit 3D DEM viewer (click to play the video)](https://raw.githubusercontent.com/lhzn-io/topobathykit/main/docs/source/_static/northfork.png)](https://assets.longhorizon.eco/website-longhorizon-eco/topobathykit-northfork.mp4?v=20261020)
+
+*A 37 s flight along the North Fork of Long Island and out over the Race in the 3D DEM viewer (click the image to play). The readout names the source survey under the cursor, from per-pixel provenance.*
 
 **Policy-driven topobathymetric fusion runtime for data-first digital worlds.**
 
