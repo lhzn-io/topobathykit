@@ -20,6 +20,13 @@ with contextlib.suppress(ImportError):
 
     pyproj.network.set_network_enabled(False)
 
+# Timeouts and retries for remote COG reads, and a cap on GDAL curl failure spam
+# (see gdal_http). Set after .env so values there take precedence.
+from .gdal_http import apply_gdal_http_defaults, install_curl_failure_filter  # noqa: E402
+
+apply_gdal_http_defaults()
+install_curl_failure_filter()
+
 from .providers.registry import registry  # noqa: E402
 from .quality import TIDClassifier, source_report  # noqa: E402
 

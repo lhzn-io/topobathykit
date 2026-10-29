@@ -5,13 +5,18 @@ This module executes fusion policies to generate topobathymetric datasets.
 """
 
 import contextlib
+import dataclasses
 import gc
 import hashlib
 import json
 import logging
+import logging.handlers
 import multiprocessing
+import multiprocessing.connection
 import os
-from collections.abc import Iterable
+import shutil
+import time as time_module
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
@@ -593,6 +598,269 @@ def _cell_integrity_problems(ds: xr.Dataset, max_nan_fraction: float | None) -> 
     return problems
 
 
+# Default wall-clock limit for hydrating one cell in its own worker process. A worker
+# whose GDAL curl state broke after a failed range read has spun at 100 percent CPU
+# without progress (issue #45); past this limit it is killed and the cell is failed.
+DEFAULT_CELL_TIMEOUT_S = 1800.0
+
+
+def _cell_timeout_s() -> float:
+    """Return the per-cell hydration timeout, from TOPOBATHY_CELL_TIMEOUT_S if set."""
+    raw = os.environ.get("TOPOBATHY_CELL_TIMEOUT_S")
+    if raw is None or raw.strip() == "":
+        return DEFAULT_CELL_TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        value = 0.0
+    if value <= 0:
+        logger.warning(f"Ignoring invalid TOPOBATHY_CELL_TIMEOUT_S={raw!r}")
+        return DEFAULT_CELL_TIMEOUT_S
+    return value
+
+
+@dataclasses.dataclass(frozen=True)
+class _HydrateCellJob:
+    """Everything needed to hydrate one cell, picklable for a spawned worker."""
+
+    policy_input: Any
+    policy: Any
+    index: int
+    n_cells: int
+    cell_bbox: tuple[float, float, float, float]
+    resolution: float
+    time: datetime | None
+    grid_cell_size: Any
+    legend: str
+    policy_content_hash: str
+    nan_ceiling: float | None
+    target_zoom: int | None
+
+
+def _cell_cache_hit(job: _HydrateCellJob) -> bool:
+    """Return True when the job's cell is already cached by the current algorithm and grid."""
+    cache_path, _ = get_fused_cache_info(job.policy_input, job.cell_bbox, resolution=job.resolution)
+
+    # Ensure parent dir exists (lazy creation)
+    if not cache_path.parent.exists():
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not cache_path.exists():
+        return False
+    try:
+        # Lightweight check: valid Zarr?
+        ds_meta = xr.open_dataset(cache_path, engine="zarr", decode_coords="all")
+
+        valid_grid = ds_meta.attrs.get("grid_cell_size") == job.grid_cell_size
+        # We trust our hash includes policy content, so a hit is a hit on policy content.
+        # But we double check legend just in case of collisions or old data.
+        cached_legend = ds_meta.attrs.get("policy_legend")
+        valid_legend = not (cached_legend and cached_legend != job.legend)
+        valid_algo = _cache_algo_matches(ds_meta.attrs)
+        if not valid_algo:
+            logger.info(f"Fusion algorithm mismatch for {cache_path.name}. Rebuilding.")
+
+        ds_meta.close()
+        return bool(valid_grid and valid_legend and valid_algo)
+    except Exception as e:
+        logger.warning(f"Cache check failed for {cache_path}: {e}")
+        return False
+
+
+def _hydrate_cell(job: _HydrateCellJob) -> str:
+    """Fuse one uncached cell and write it to the cache; return "processed" or "failed"."""
+    cache_path, key_hash = get_fused_cache_info(job.policy_input, job.cell_bbox, resolution=job.resolution)
+    cell_bbox = job.cell_bbox
+
+    policy_display_name = getattr(job.policy, "name", "Unnamed") or "Unnamed"
+    logger.info(
+        f"Hydrating cell {job.index}/{job.n_cells} [{policy_display_name}]: {cell_bbox} -> {cache_path.name}"
+    )
+
+    # Process and Cache
+    try:
+        ds_cell = _run_cell(
+            policy=job.policy,
+            cell_bbox=cell_bbox,
+            resolution=job.resolution,
+            time=job.time,
+            target_crs=job.policy.crs,
+            halo_pct=0.10,
+        )
+
+        # Refuse to cache an incomplete cell. A cached zarr is treated as a valid
+        # hit on every later hydrate run, so caching a cell in which a step failed
+        # (network timeout, VDatum outage, MemoryError) or that is mostly NaN would
+        # permanently lock in the hole. Leaving it uncached retries it next time.
+        problems = _cell_integrity_problems(ds_cell, job.nan_ceiling)
+        if problems:
+            logger.warning(
+                f"Cell {cell_bbox} is incomplete; skipping cache write so it will be "
+                f"retried on next hydrate: {'; '.join(problems)}"
+            )
+            return "failed"
+
+        new_attrs: dict[str, object] = {
+            "policy_hash": job.policy_content_hash,
+            "cache_key": key_hash,
+            "fusion_algo_version": FUSION_ALGO_VERSION,
+            "policy_legend": job.legend,
+            "grid_cell_size": job.grid_cell_size,
+            "crs": job.policy.crs,
+            "created_at": datetime.utcnow().isoformat(),
+            "cell_bbox": list(cell_bbox),
+            "hydrated": "true",
+            "source": "hydrate",
+            "resolution_m": round(job.resolution, 4),
+        }
+        if job.target_zoom is not None:
+            new_attrs["target_zoom"] = int(job.target_zoom)
+            new_attrs["resolution_origin"] = "zoom"
+        else:
+            new_attrs["resolution_origin"] = "meters"
+        ds_cell.attrs.update(new_attrs)
+        if "provenance_dict" in ds_cell.attrs:
+            ds_cell.attrs["provenance_dict_json"] = json.dumps(ds_cell.attrs["provenance_dict"])
+
+        # Save to Cache
+        ds_chunked = ds_cell.chunk({"y": 2048, "x": 2048})
+        tmp_path = cache_path.with_suffix(f".tmp.{key_hash}.zarr")
+
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+
+        ds_chunked.to_zarr(tmp_path, mode="w", consolidated=should_consolidate())
+
+        if cache_path.exists():
+            shutil.rmtree(cache_path)
+
+        shutil.move(str(tmp_path), str(cache_path))
+
+        del ds_chunked  # release reference before close
+        ds_cell.close()
+        del ds_cell
+        gc.collect()
+        return "processed"
+
+    except Exception as e:
+        logger.error(f"Failed to hydrate cell {cell_bbox}: {e}", exc_info=True)
+        return "failed"
+
+
+class _RedispatchHandler(logging.Handler):
+    """Hand a record received from a worker process to the parent's logger of the same name."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        logging.getLogger(record.name).handle(record)
+
+
+def _isolated_worker_entry(
+    fn: Callable[[Any], str],
+    job: Any,
+    conn: multiprocessing.connection.Connection,
+    log_queue: Any,
+    log_level: int,
+) -> None:
+    """Run fn(job) in a spawned worker, forward its logging to the parent, send back the status."""
+    root = logging.getLogger()
+    root.handlers[:] = [logging.handlers.QueueHandler(log_queue)]
+    root.setLevel(log_level)
+    try:
+        status = fn(job)
+    except BaseException as e:
+        logger.error(f"Hydration worker raised {type(e).__name__}: {e}", exc_info=True)
+        status = "failed"
+    conn.send(status)
+    conn.close()
+
+
+def _run_isolated(
+    fn: Callable[[Any], str],
+    jobs: Iterable[Any],
+    max_workers: int,
+    timeout_s: float,
+    on_result: Callable[[Any, str], None],
+) -> None:
+    """Run fn(job) for each job in its own spawned process, at most max_workers at a time.
+
+    Each worker runs exactly one job, so state a failed job leaves behind (GDAL curl
+    handles, leaked memory) dies with its process instead of reaching the next job.
+    A worker still running after `timeout_s` is killed, and a worker that exits
+    without reporting (OOM kill, crash) is counted as failed; both report "failed" to
+    `on_result`. Spawn, not fork, so no lock or thread state is inherited from the
+    parent. Workers left running when this returns or raises are killed.
+    """
+    ctx = multiprocessing.get_context("spawn")
+    log_queue = ctx.Queue()
+    listener = logging.handlers.QueueListener(log_queue, _RedispatchHandler())
+    listener.start()
+    log_level = logging.getLogger().getEffectiveLevel()
+
+    pending = list(jobs)
+    pending.reverse()
+    running: dict[Any, tuple[Any, float, multiprocessing.connection.Connection]] = {}
+    try:
+        while pending or running:
+            while pending and len(running) < max(max_workers, 1):
+                job = pending.pop()
+                recv_conn, send_conn = ctx.Pipe(duplex=False)
+                proc = ctx.Process(
+                    target=_isolated_worker_entry,
+                    args=(fn, job, send_conn, log_queue, log_level),
+                    daemon=True,
+                )
+                proc.start()
+                send_conn.close()
+                running[proc] = (job, time_module.monotonic(), recv_conn)
+
+            multiprocessing.connection.wait(
+                [conn for _, _, conn in running.values()] + [p.sentinel for p in running],
+                timeout=1.0,
+            )
+
+            for proc, (job, started, conn) in list(running.items()):
+                status: str | None = None
+                if conn.poll():
+                    try:
+                        status = conn.recv()
+                    except EOFError:
+                        status = "failed"
+                elif not proc.is_alive():
+                    logger.error(
+                        f"Hydration worker for {getattr(job, 'cell_bbox', job)} exited with code "
+                        f"{proc.exitcode} without a result"
+                    )
+                    status = "failed"
+                elif time_module.monotonic() - started > timeout_s:
+                    logger.error(
+                        f"Hydration worker for {getattr(job, 'cell_bbox', job)} exceeded "
+                        f"{timeout_s:.0f} s; killing it and failing the cell"
+                    )
+                    _stop_process(proc)
+                    status = "failed"
+                if status is None:
+                    continue
+                proc.join(timeout=10)
+                conn.close()
+                del running[proc]
+                on_result(job, status)
+    finally:
+        for proc, (_, _, conn) in running.items():
+            _stop_process(proc)
+            conn.close()
+        listener.stop()
+        log_queue.close()
+
+
+def _stop_process(proc: Any) -> None:
+    """Terminate a worker process, escalating to kill if it does not exit promptly."""
+    proc.terminate()
+    proc.join(timeout=5)
+    if proc.is_alive():
+        proc.kill()
+        proc.join(timeout=5)
+
+
 def _resolve_policy(policy_input: str | Path) -> Any:
     """
     Resolve policy input to a FusionPolicy object.
@@ -722,10 +990,16 @@ def hydrate(
     on_progress: Any | None = None,
     target_zoom: int | None = None,
     max_nan_fraction: float | None = None,
+    cell_timeout_s: float | None = None,
 ) -> dict[str, int]:
     """
     Hydrate the cache for a given bbox and resolution by processing all covering grid cells.
     Does not return the fused dataset, only ensures cells are cached.
+
+    Cache hits are checked in this process. Each uncached cell is then fused in its own
+    spawned worker process (see `_run_isolated`), at most `max_workers` at a time. Inside
+    a daemon process, which cannot start children, cells run on a thread pool instead,
+    without isolation or a timeout.
 
     Args:
         on_progress: Optional callback called with (stats_dict) after each cell completes.
@@ -735,12 +1009,15 @@ def hydrate(
         max_nan_fraction: Cells whose NaN fraction exceeds this are counted as failed and
                      not cached. Defaults to TOPOBATHY_MAX_CELL_NAN_FRACTION, else 0.01.
                      Pass 1.0 to accept any cell that is not entirely NaN.
+        cell_timeout_s: Seconds a cell's worker process may run before it is killed and the
+                     cell failed. Defaults to TOPOBATHY_CELL_TIMEOUT_S, else 1800.
     """
 
     policy = _resolve_policy(policy_input)
     target_crs = policy.crs
     res = resolution if resolution else 30.0
     nan_ceiling = _max_cell_nan_fraction() if max_nan_fraction is None else max_nan_fraction
+    timeout_s = _cell_timeout_s() if cell_timeout_s is None else cell_timeout_s
 
     # Determine Grid Cells
     cells, grid_cell_size = _get_grid_cells(bbox, target_crs)
@@ -756,167 +1033,58 @@ def hydrate(
         f"Starting hydration for {len(cells)} cells [{policy_display_name}]. BBox: {bbox}, Res: {res}"
     )
 
-    def _process_cell(i: int, cell_bbox: tuple[float, float, float, float]) -> str:
-        # Use centralized cache helper
-        cache_path, key_hash = get_fused_cache_info(policy_input, cell_bbox, resolution=res)
-
-        # Ensure parent dir exists (lazy creation)
-        if not cache_path.parent.exists():
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-
-        is_cached = False
-        if cache_path.exists():
-            try:
-                # Lightweight check: valid Zarr?
-                ds_meta = xr.open_dataset(cache_path, engine="zarr", decode_coords="all")
-
-                valid_grid = ds_meta.attrs.get("grid_cell_size") == grid_cell_size
-                # We trust our hash includes policy content, so a hit is a hit on policy content.
-                # But we double check legend just in case of collisions or old data.
-                cached_legend = ds_meta.attrs.get("policy_legend")
-                valid_legend = not (cached_legend and cached_legend != str(legend))
-                valid_algo = _cache_algo_matches(ds_meta.attrs)
-                if not valid_algo:
-                    logger.info(f"Fusion algorithm mismatch for {cache_path.name}. Rebuilding.")
-
-                if valid_grid and valid_legend and valid_algo:
-                    is_cached = True
-
-                ds_meta.close()
-            except Exception as e:
-                logger.warning(f"Cache check failed for {cache_path}: {e}")
-
-        if is_cached:
+    pending: list[_HydrateCellJob] = []
+    for i, cell_bbox in enumerate(cells, 1):
+        job = _HydrateCellJob(
+            policy_input=policy_input,
+            policy=policy,
+            index=i,
+            n_cells=len(cells),
+            cell_bbox=cell_bbox,
+            resolution=res,
+            time=time,
+            grid_cell_size=grid_cell_size,
+            legend=str(legend),
+            policy_content_hash=policy_content_hash,
+            nan_ceiling=nan_ceiling,
+            target_zoom=target_zoom,
+        )
+        if _cell_cache_hit(job):
             if i % 10 == 0:
                 logger.info(f"Hydration progress: {i}/{len(cells)} (Cached)")
-            return "cached"
+            stats["cached"] += 1
+            if on_progress:
+                on_progress(stats)
+        else:
+            pending.append(job)
 
-        policy_display_name = getattr(policy, "name", "Unnamed") or "Unnamed"
-        logger.info(
-            f"Hydrating cell {i}/{len(cells)} [{policy_display_name}]: {cell_bbox} -> {cache_path.name}"
-        )
+    def _record_result(_job: Any, status: str) -> None:
+        stats[status] += 1
+        if on_progress:
+            on_progress(stats)
 
-        # Process and Cache
-        try:
-            ds_cell = _run_cell(
-                policy=policy,
-                cell_bbox=cell_bbox,
-                resolution=res,
-                time=time,
-                target_crs=target_crs,
-                halo_pct=0.10,
-            )
-
-            # Refuse to cache an incomplete cell. A cached zarr is treated as a valid
-            # hit on every later hydrate run, so caching a cell in which a step failed
-            # (network timeout, VDatum outage, MemoryError) or that is mostly NaN would
-            # permanently lock in the hole. Leaving it uncached retries it next time.
-            problems = _cell_integrity_problems(ds_cell, nan_ceiling)
-            if problems:
-                logger.warning(
-                    f"Cell {cell_bbox} is incomplete; skipping cache write so it will be "
-                    f"retried on next hydrate: {'; '.join(problems)}"
-                )
-                return "failed"
-
-            new_attrs: dict[str, object] = {
-                "policy_hash": policy_content_hash,
-                "cache_key": key_hash,
-                "fusion_algo_version": FUSION_ALGO_VERSION,
-                "policy_legend": str(legend),
-                "grid_cell_size": grid_cell_size,
-                "crs": target_crs,
-                "created_at": datetime.utcnow().isoformat(),
-                "cell_bbox": list(cell_bbox),
-                "hydrated": "true",
-                "source": "hydrate",
-                "resolution_m": round(res, 4),
-            }
-            if target_zoom is not None:
-                new_attrs["target_zoom"] = int(target_zoom)
-                new_attrs["resolution_origin"] = "zoom"
-            else:
-                new_attrs["resolution_origin"] = "meters"
-            ds_cell.attrs.update(new_attrs)
-            if "provenance_dict" in ds_cell.attrs:
-                ds_cell.attrs["provenance_dict_json"] = json.dumps(ds_cell.attrs["provenance_dict"])
-
-            # Save to Cache
-            ds_chunked = ds_cell.chunk({"y": 2048, "x": 2048})
-            tmp_path = cache_path.with_suffix(f".tmp.{key_hash}.zarr")
-
-            if tmp_path.exists():
-                import shutil
-
-                shutil.rmtree(tmp_path)
-
-            ds_chunked.to_zarr(tmp_path, mode="w", consolidated=should_consolidate())
-
-            if cache_path.exists():
-                import shutil
-
-                shutil.rmtree(cache_path)
-
-            import shutil
-
-            shutil.move(str(tmp_path), str(cache_path))
-
-            del ds_chunked  # release reference before close
-            ds_cell.close()
-            del ds_cell
-            gc.collect()
-            return "processed"
-
-        except Exception as e:
-            logger.error(f"Failed to hydrate cell {cell_bbox}: {e}", exc_info=True)
-            return "failed"
-
-    import concurrent.futures
-
-    # Process cells in small batches using ProcessPoolExecutor.
-    # Each cell runs in its own subprocess with isolated memory, so:
-    # - A cell that hits MemoryError dies without affecting others
-    # - GC of large provider arrays is guaranteed on process exit
-    # - No GIL contention between cells doing CPU-heavy reprojection
-    # Falls back to ThreadPoolExecutor if fork is unavailable.
-    batch_size = max(max_workers or 2, 2) * 2
-    cell_items = list(enumerate(cells, 1))
-
-    # Daemon processes cannot spawn children (ProcessPoolExecutor would fail with
-    # "daemonic processes are not allowed to have children"). This happens when
-    # hydrate() runs inside the /hydrate endpoint's subprocess. Fall back to threads.
+    # Daemon processes cannot start children ("daemonic processes are not allowed to
+    # have children"), so cells run on threads there, sharing this process's GDAL state.
     current = multiprocessing.current_process()
-    is_daemon = getattr(current, "daemon", False)
+    if getattr(current, "daemon", False):
+        logger.info("Running inside daemon process, using ThreadPoolExecutor without cell timeouts")
+        import concurrent.futures
 
-    pool_cls: type = concurrent.futures.ThreadPoolExecutor
-    pool_kwargs: dict[str, Any] = {"max_workers": max_workers}
-
-    if not is_daemon:
-        try:
-            mp_ctx = multiprocessing.get_context("fork")
-            pool_cls = concurrent.futures.ProcessPoolExecutor
-            pool_kwargs = {"max_workers": max_workers, "mp_context": mp_ctx}
-        except ValueError:
-            logger.info("ProcessPoolExecutor(fork) unavailable, falling back to threads")
-    else:
-        logger.info("Running inside daemon process, using ThreadPoolExecutor")
-
-    for batch_start in range(0, len(cell_items), batch_size):
-        batch = cell_items[batch_start : batch_start + batch_size]
-
-        with pool_cls(**pool_kwargs) as executor:
-            futures = {executor.submit(_process_cell, i, cb): cb for i, cb in batch}
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    status = future.result()
-                except Exception as e:
-                    logger.error(f"Cell worker crashed: {e}")
-                    status = "failed"
-                stats[status] += 1
-                if on_progress:
-                    on_progress(stats)
-
-        gc.collect()
+        batch_size = max(max_workers or 2, 2) * 2
+        for batch_start in range(0, len(pending), batch_size):
+            batch = pending[batch_start : batch_start + batch_size]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(_hydrate_cell, job): job for job in batch}
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        status = future.result()
+                    except Exception as e:
+                        logger.error(f"Cell worker crashed: {e}")
+                        status = "failed"
+                    _record_result(futures[future], status)
+            gc.collect()
+    elif pending:
+        _run_isolated(_hydrate_cell, pending, max_workers or 2, timeout_s, _record_result)
 
     logger.info(f"Hydration complete. Stats: {stats}")
     return stats

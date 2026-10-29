@@ -307,7 +307,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info(f"Using Fusion Policy: {POLICY_PATH}")
 
     yield
-    # clean up logic if needed
+
+    # Hydration processes are not daemons (they start per-cell workers), so stop any
+    # still running instead of leaving them behind the server.
+    for job_id, proc in list(_HYDRATE_PROCESSES.items()):
+        if proc.is_alive():
+            logger.info(f"Stopping hydration [{job_id}] on shutdown")
+            proc.terminate()
+            proc.join(timeout=10)
+            if proc.is_alive():
+                proc.kill()
+                proc.join(timeout=5)
 
 
 app = FastAPI(
@@ -1656,6 +1666,9 @@ def _hydrate_subprocess(
 
     # Ignore SIGINT in subprocess — let the parent handle Ctrl+C
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # On SIGTERM (cancel, shutdown) unwind instead of dying outright, so hydrate()
+    # kills the per-cell worker processes it started.
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
 
     # Set a memory ceiling so the subprocess raises MemoryError instead of
     # being OOM-killed. Default: 80% of system RAM. Cells that exceed the
@@ -1787,7 +1800,9 @@ async def trigger_hydrate(
             request.max_workers,
             request.zoom,
         ),
-        daemon=True,
+        # Not a daemon: hydrate() runs each cell in its own worker process, which a
+        # daemon may not start. Shutdown and cancel terminate it explicitly.
+        daemon=False,
     )
     proc.start()
 
