@@ -8,8 +8,10 @@ from typing import Any, ClassVar, cast
 
 import fsspec
 import geopandas as gpd
+import numpy as np
 import requests  # type: ignore
 import rioxarray
+import shapely
 import xarray as xr
 from rioxarray.exceptions import NoDataInBounds, OneDimensionalRaster
 from shapely.geometry import box
@@ -41,6 +43,45 @@ def _fetch_index_cached(url: str) -> str:
     response = requests.get(url, timeout=10)
     response.raise_for_status()
     return str(response.text)
+
+
+# A matched tile index row this many times the index's median footprint is treated as
+# a whole-coverage file rather than a tile.
+WHOLE_COVERAGE_AREA_RATIO = 20.0
+
+
+def _drop_whole_coverage_files(
+    tile_index: gpd.GeoDataFrame, matches: gpd.GeoDataFrame, query_geom: Any
+) -> gpd.GeoDataFrame:
+    """Drop whole-coverage rows from `matches` where the tile rows cover their part of the query.
+
+    Some tile indexes list a project's whole-coverage COG beside the tiles cut from it
+    (the 2016 New England CoNED topobathy DEM: one 112,674 km2 file and 663 tiles of about
+    107 km2). Ranged reads deep into the large file have left GDAL's curl state broken
+    (#45), and the tiles hold the same pixels in files of 70 to 200 MB (checked over a
+    1 km window, 1.2 million pixels, identical). A large row is kept wherever the tiles
+    leave part of the query uncovered.
+    """
+    if len(matches) < 2:
+        return matches
+    areas = shapely.area(tile_index.geometry.to_numpy())
+    threshold = WHOLE_COVERAGE_AREA_RATIO * float(np.median(areas))
+    match_geoms = matches.geometry.to_numpy()
+    is_large = shapely.area(match_geoms) > threshold
+    if not is_large.any() or is_large.all():
+        return matches
+
+    tiles_union = shapely.union_all(match_geoms[~is_large])
+    keep = ~is_large
+    for i in np.flatnonzero(is_large):
+        needed = shapely.intersection(match_geoms[i], query_geom)
+        uncovered = shapely.area(shapely.difference(needed, tiles_union))
+        if uncovered > 1e-4 * shapely.area(needed):
+            keep[i] = True
+    dropped = int((~keep).sum())
+    if dropped:
+        logger.debug(f"Topobathy: using tiles in place of {dropped} whole-coverage file(s) for this bbox")
+    return matches[keep]
 
 
 class NoaaTopobathyProvider(Provider):
@@ -1243,6 +1284,7 @@ class NoaaTopobathyProvider(Provider):
         valid_mask = tile_index.geometry.notnull()
         valid_index = tile_index[valid_mask]
         matches = valid_index[valid_index.intersects(query_geom)]
+        matches = _drop_whole_coverage_files(valid_index, matches, query_geom)
 
         results = []
         for _, row in matches.iterrows():
