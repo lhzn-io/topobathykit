@@ -11,6 +11,7 @@ registry.auto_discover()
 __all__ = [
     "Provider",
     "gebco_2025",
+    "gmrt",
     "jcu_gbr100",
     "ncei_bag",
     "ncei_cudem",

@@ -374,6 +374,7 @@ SOURCE_ID_BLOCKS: dict[str, int] = {
     "usgs_lidar": 7,
     "copernicus_dsm": 8,
     "nasadem": 9,
+    "gmrt": 10,
 }
 
 

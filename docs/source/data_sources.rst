@@ -17,6 +17,25 @@ General Bathymetric Chart of the Oceans (GEBCO)
     *   **Citation**: GEBCO Compilation Group (2025) GEBCO 2025 Grid (doi:10.5285/1c44ce9e-0a53-431f-9780-3843464522c5).
     *   **Access**: `GEBCO Grid Download <https://www.gebco.net/data_and_products/gridded_bathymetry_data/>`_
 
+Deep-Water Multibeam (Tier 3.8)
+-------------------------------
+
+Global Multi-Resolution Topography (GMRT)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+*   **GMRT synthesis** (provider ``gmrt``)
+
+    *   **Description**: Processed ship multibeam, including NOAA Ocean Exploration surveys, merged over a global base by Lamont-Doherty Earth Observatory. On the outer shelf and continental slope, beyond BlueTopo's surveyed contributors and the NCEI BAG holdings, it keeps relief that GEBCO smooths. Over the Northeast Canyons box (-69.6 to -69.4 E, 39.8 to 40.0 N) the multibeam layer covers 99.8% of the box at 61 m per node and spans -104 to -1,901 m.
+    *   **Layers**: ``topo-mask`` (the default) returns only multibeam-backed cells, so lower policy steps show through elsewhere; ``topo`` returns multibeam over the global base. Choose with ``filter: {layer: topo}``.
+    *   **Resolution**: the GridServer is asked for the coarsest of its levels that is at least as fine as the requested resolution (``mresolution``). At 40 N the levels are about 489, 245, 122 and 61 m.
+    *   **Caching**: by bounding box, node spacing, layer and GMRT version, under ``<cache>/gmrt/v<version>/``. A new GMRT release starts a new cache. When the server cannot be reached, the newest cached grid for the same bounding box and layer is used.
+    *   **Vertical datum**: depths are taken as relative to mean sea level, and no VDatum conversion is applied. Offshore, the chart-datum offsets are a few decimetres against depths of hundreds of metres.
+    *   **Provenance**: each fused cell from GMRT carries a ``source_id`` whose provenance entry names the GMRT version, layer, node spacing, citation and licence. The GridServer does not list the contributing cruises for a bounding box, so cruise ids are not recorded.
+    *   **Licence**: CC BY 4.0.
+    *   **Citation**: Ryan, W.B.F., et al. (2009), Global Multi-Resolution Topography synthesis, Geochem. Geophys. Geosyst., 10, Q03014, doi:10.1029/2008GC002332, with the GMRT version used.
+    *   **Access**: `GMRT <https://www.gmrt.org/>`_ | `GridServer web service <https://www.gmrt.org/services/>`_
+    *   **Example policy**: ``policies/examples/outer_shelf_gmrt.yaml`` (GEBCO 2025, then GMRT ``topo-mask`` feathered over 1 km, then surveyed BlueTopo contributors and NCEI BAG surveys feathered over 300 m).
+
 Continental / Land (Tier 3.5)
 -----------------------------
 
@@ -149,6 +168,10 @@ evidence-backed handling:
          - metadata-dependent
          - OPeNDAP grid values are generally well-formed; masking still applied as safety net
          - Shared metadata-driven masking on tile ingest and final merged elevation
+     * - GMRT
+         - NaN (no nodata tag)
+         - GridServer GeoTIFFs mark cells without multibeam as NaN in the ``topo-mask`` layer
+         - Shared metadata-driven masking; an all-NaN grid is reported as no data
 
 Implementation Note:
 

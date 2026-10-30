@@ -1,0 +1,41 @@
+name: "Outer Shelf Multibeam Fusion"
+description: >
+  GEBCO 2025 as the global base, GMRT ship multibeam (topo-mask) feathered over it, then surveyed
+  BlueTopo contributors and NCEI BAG surveys where they reach. Suited to domains that extend past
+  the surveyed shelf onto the outer shelf and continental slope.
+version: "1.0.0"
+crs: "EPSG:4326"
+
+variables:
+  - name: "elevation"
+    description: "Topobathymetric elevation (meters). GMRT and GEBCO are relative to mean sea level."
+    steps:
+      # Base: global grid, about 450 m
+      - provider: "gebco_2025"
+        operation: "overwrite"
+
+      # Ship multibeam from GMRT. topo-mask returns only multibeam-backed cells, so GEBCO shows
+      # through elsewhere; the 1 km feather hides the step at the swath edges.
+      - provider: "gmrt"
+        product: "topo-mask"
+        operation: "metric_feather"
+        blend_distance: 1000.0
+        filter:
+          layer: "topo-mask"
+
+      # Surveyed BlueTopo contributors only (no interpolated, upsampled or generalized cells)
+      - provider: "noaa_bluetopo"
+        operation: "metric_feather"
+        blend_distance: 300.0
+        filter:
+          exclude_patterns:
+            - "(?i).*interpolated.*"
+            - "(?i).*upsampled.*"
+            - "(?i).*generaliz.*"
+
+      # Survey truth
+      - provider: "ncei_bag"
+        operation: "metric_feather"
+        blend_distance: 300.0
+        filter:
+          max_depth_change: 80.0
