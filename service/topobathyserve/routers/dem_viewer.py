@@ -13,6 +13,7 @@ from topobathyserve.models import DEMQualityReport
 
 from topobathykit.config import get_cache_root
 from topobathykit.quality import calculate_spatial_stats
+from topobathykit.runtime import fill_short_gaps
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,10 @@ def _cluster_cells(
 # The cached .bin is always at most this many pixels on its longest side.
 MOSAIC_BUILD_MAX_DIM = 8192
 
+# Recorded in each mosaic sidecar; a sidecar written by another version is rebuilt.
+# 2: short gaps filled as in /fuse (#40).
+MOSAIC_VERSION = 2
+
 
 def _downsample_nearest(arr: np.ndarray, new_h: int, new_w: int) -> np.ndarray:
     """Nearest-neighbour downsample a 2-D array (works for float32 and uint32, preserves NaN)."""
@@ -259,6 +264,15 @@ def _mosaic_to_bin(
 
         except Exception as e:
             logger.warning(f"Failed to paint cell {cell_path.name}: {e}")
+
+    # Fill the short gaps /fuse fills, so the two agree on which pixels are NaN. Under
+    # the build cap the two-pixel limit applies to canvas pixels.
+    grid = xr.DataArray(
+        canvas,
+        dims=("y", "x"),
+        coords={"y": np.arange(height, 0, -1, dtype=np.float64), "x": np.arange(width, dtype=np.float64)},
+    )
+    canvas = fill_short_gaps(grid).values.astype(np.float32, copy=False)
 
     logger.info(
         f"Mosaic complete: {cells_painted} cells -> {width}x{height} canvas (scale={build_scale:.3f})"
@@ -538,7 +552,8 @@ async def get_elevation_binary(
                 expected_w = expected_h = 0
             cells_rewritten = _cells_newer_than(cell_mtimes, cache_bin)
             if (
-                cached.get("cell_count") == current_cells
+                cached.get("mosaic_version") == MOSAIC_VERSION
+                and cached.get("cell_count") == current_cells
                 and cached.get("width") == expected_w
                 and cached.get("height") == expected_h
                 and not cells_rewritten
@@ -599,6 +614,7 @@ async def get_elevation_binary(
             cache_meta_file.write_text(
                 json.dumps(
                     {
+                        "mosaic_version": MOSAIC_VERSION,
                         "width": build_w,
                         "height": build_h,
                         "cell_count": meta["cell_count"],

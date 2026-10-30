@@ -108,6 +108,27 @@ def _get_grid_cells(
     return cells, grid_size
 
 
+def fill_short_gaps(elev: xr.DataArray) -> xr.DataArray:
+    """Linearly fill up to two NaN pixels per interior gap along y, then along x.
+
+    `run` applies this to the merged mosaic, and the DEM viewer applies it to its
+    painted canvas, so the two agree on which pixels are NaN. It closes the stripes
+    left between cells with offset grids and the one- and two-pixel holes some
+    stored cells contain; a longer gap has its first two pixels filled, and gaps
+    open to the array edge are not extrapolated into. interpolate_na requires a
+    monotonically increasing index; y is north-up (descending), so sort ascending,
+    fill, then restore.
+    """
+    if not bool(elev.isnull().any()):
+        return elev
+    return (
+        elev.sortby("y", ascending=True)
+        .interpolate_na(dim="y", method="linear", limit=2)
+        .sortby("y", ascending=False)
+        .interpolate_na(dim="x", method="linear", limit=2)
+    )
+
+
 def _on_canvas(aligned: xr.DataArray, canvas: xr.DataArray) -> xr.DataArray:
     """Give an array resampled onto the canvas grid the canvas's exact coordinates.
 
@@ -1410,17 +1431,8 @@ def run(
         # slightly offset from each other.  combine_by_coords unions both coordinate arrays
         # rather than aligning them, producing interleaved valid/NaN rows at cell boundaries.
         # Fill those stripes now so downstream linear interp doesn't propagate them.
-        # Note: interpolate_na requires a monotonically increasing index; y is north-up
-        # (descending), so sort ascending, fill, then restore.
         if "elevation" in merged_ds:
-            elev = merged_ds["elevation"]
-            if bool(elev.isnull().any()):
-                merged_ds["elevation"] = (
-                    elev.sortby("y", ascending=True)
-                    .interpolate_na(dim="y", method="linear", limit=2)
-                    .sortby("y", ascending=False)
-                    .interpolate_na(dim="x", method="linear", limit=2)
-                )
+            merged_ds["elevation"] = fill_short_gaps(merged_ds["elevation"])
 
         logger.info(f"Mosaic complete. Final combined shape: {merged_ds.dims}")
 

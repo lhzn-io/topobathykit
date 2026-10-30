@@ -1,6 +1,7 @@
 """Tests for DEM viewer mosaic sidecar invalidation."""
 
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -17,13 +18,17 @@ from topobathyserve.routers import dem_viewer
 DATASET_ID = "abcd1234_1m"
 
 
-def _write_cell(policy_dir: Path, name: str, x0: float, value: float) -> Path:
-    """Write a 4 x 4 cell zarr on a 1-unit grid whose west edge is at x0."""
+def _write_cell(policy_dir: Path, name: str, x0: float, value: float | np.ndarray) -> Path:
+    """Write a 4 x 4 cell zarr on a 1-unit grid whose west edge is at x0.
+
+    `value` is a scalar or a 4 x 4 array, north-first.
+    """
     xs = x0 + np.arange(4, dtype=np.float64)
     ys = np.arange(3, -1, -1, dtype=np.float64)
+    elev = np.broadcast_to(np.asarray(value, dtype=np.float32), (4, 4)).copy()
     ds = xr.Dataset(
         {
-            "elevation": (("y", "x"), np.full((4, 4), value, dtype=np.float32)),
+            "elevation": (("y", "x"), elev),
             "source_elevation": (("y", "x"), np.full((4, 4), 1, dtype=np.uint32)),
         },
         coords={"x": xs, "y": ys},
@@ -90,6 +95,48 @@ def test_mosaic_cache_hit_when_cells_unchanged(policy_dir: Path) -> None:
     cache_bin.write_bytes(marker)
 
     assert (_elevation(DATASET_ID) == 42.0).all(), "unchanged cells must be served from the sidecar"
+
+
+def test_mosaic_fills_short_gaps_inside_cells(policy_dir: Path) -> None:
+    """One- and two-pixel NaN holes inside a stored cell are filled as /fuse fills them (#40)."""
+    elev = np.array(
+        [
+            [-10.0, -11.0, -12.0, -13.0],
+            [-10.0, np.nan, -12.0, -13.0],
+            [-10.0, np.nan, np.nan, -13.0],
+            [-10.0, -11.0, -12.0, -13.0],
+        ]
+    )
+    _write_cell(policy_dir, "a.zarr", 0.0, elev)
+
+    mosaic = _elevation(DATASET_ID).reshape(4, 4)
+
+    assert not np.isnan(mosaic).any()
+    np.testing.assert_allclose(mosaic, np.tile([-10.0, -11.0, -12.0, -13.0], (4, 1)))
+
+
+def test_mosaic_keeps_gaps_wider_than_the_fill_limit(policy_dir: Path) -> None:
+    """A whole NaN cell beside a valid one is not extrapolated into."""
+    _write_cell(policy_dir, "a.zarr", 0.0, -5.0)
+    _write_cell(policy_dir, "b.zarr", 4.0, np.nan)
+
+    mosaic = _elevation(DATASET_ID).reshape(4, 8)
+
+    assert (mosaic[:, :4] == -5.0).all()
+    assert np.isnan(mosaic[:, 4:]).all()
+
+
+def test_mosaic_sidecar_from_older_version_is_rebuilt(policy_dir: Path) -> None:
+    _write_cell(policy_dir, "a.zarr", 0.0, 1.0)
+    _elevation(DATASET_ID)
+    cache_bin = policy_dir / f"_mosaic_{DATASET_ID}.bin"
+    cache_meta = policy_dir / f"_mosaic_{DATASET_ID}.json"
+    cache_bin.write_bytes(np.full(cache_bin.stat().st_size // 4, 42.0, dtype=np.float32).tobytes())
+    meta = json.loads(cache_meta.read_text())
+    del meta["mosaic_version"]
+    cache_meta.write_text(json.dumps(meta))
+
+    assert (_elevation(DATASET_ID) == 1.0).all(), "a sidecar without the current version must be rebuilt"
 
 
 def test_clear_cache_removes_provenance_sidecar(policy_dir: Path) -> None:
