@@ -68,6 +68,12 @@ class FilterConfig(BaseModel):
     include_patterns: list[str] | None = None
     exclude_patterns: list[str] | None = None
     max_interpolation_gap_m: float | None = None
+    keep_gmrt_derived: bool = False
+    """
+    ``noaa_bluetopo`` only: keep contributors that are NOAA's resampled copy of
+    GMRT (``GMRT_*``) even when the policy also has a ``gmrt`` step. By default
+    they are skipped there, so GMRT is not fused twice.
+    """
 
 
 class CompositionStep(BaseModel):
@@ -146,6 +152,19 @@ class VariableStrategy(BaseModel):
     description: str | None = None
     steps: list[CompositionStep]
     background: float | None = None
+
+    def skips_gmrt_derived(self, step: CompositionStep) -> bool:
+        """
+        Whether ``step`` drops BlueTopo's GMRT-derived contributors.
+
+        True for a ``noaa_bluetopo`` step when this variable also has a ``gmrt``
+        step, unless the step's filter sets ``keep_gmrt_derived``.
+        """
+        if step.provider != "noaa_bluetopo":
+            return False
+        if step.filter is not None and step.filter.keep_gmrt_derived:
+            return False
+        return any(s.provider == "gmrt" for s in self.steps)
 
 
 class FusionPolicy(BaseModel):
