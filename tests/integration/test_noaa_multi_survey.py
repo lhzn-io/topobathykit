@@ -73,9 +73,9 @@ def test_noaa_clip_logic(mock_tif: object) -> None:
         bbox = (-73.515, 40.910, -73.500, 40.920)
 
         print("Fetching layer with clip (Cross-CRS)...")
-        # Resolution 0.0001 (~10m)
+        # resolution is a ground resolution in metres, matching the 10 m tile
         try:
-            da = prov.fetch_layer(bbox, resolution=0.0001)
+            da = prov.fetch_layer(bbox, resolution=10.0)
         except Exception as e:
             pytest.fail(f"fetch_layer failed with exception: {e}")
 
