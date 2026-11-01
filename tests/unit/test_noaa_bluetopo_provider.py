@@ -264,3 +264,126 @@ def test_load_tile_keeps_navd88_elevations_without_vdatum(tmp_path: Path) -> Non
     assert np.allclose(ds["elevation"].values, -5.0)
     assert ds.attrs.get("vertical_datum") == "NAVD88"
     assert "vdatum_offset" not in ds.attrs
+
+
+# ---------------------------------------------------------------------------
+# GMRT-derived contributors (#56)
+# ---------------------------------------------------------------------------
+
+_CONTRIBUTORS = {1: "GMRT_61m_US3MA1AD", 2: "H06441"}
+
+
+def _gmrt_and_survey_tile() -> xr.Dataset:
+    """A tile whose west half is a GMRT-derived contributor and east half a survey."""
+    ds = _make_tile_dataset(-72.0, -71.9, 41.0, 41.1, "EPSG:4326", value=-80.0, src_id=1)
+    src = ds["source_id"].values.copy()
+    src[:, 16:] = 2
+    ds["source_id"].values = src
+    return ds
+
+
+def _fetch_two_contributors(provider: NoaaBlueTopoProvider, filter_opts: dict[str, Any]) -> xr.Dataset:
+    with (
+        patch.object(provider, "resolve_tiles_in_bbox", return_value=["TILE_1"]),
+        patch.object(provider, "load_tile_as_da", return_value=_gmrt_and_survey_tile()),
+        patch.object(
+            provider, "_resolve_from_sidecar_rat", side_effect=lambda _tid, pval: _CONTRIBUTORS[pval]
+        ),
+    ):
+        result = provider.fetch_layer(bbox=(-72.0, 41.0, -71.9, 41.1), crs="EPSG:4326", filter=filter_opts)
+    assert isinstance(result, xr.Dataset)
+    return result
+
+
+def test_is_gmrt_derived() -> None:
+    from topobathykit.providers.noaa_bluetopo import is_gmrt_derived
+
+    assert is_gmrt_derived("GMRT_61m_US3MA1AD")
+    assert not is_gmrt_derived("H06441")
+    assert not is_gmrt_derived("W00387_MB_VR_MLLW")
+    assert not is_gmrt_derived("US,US,graph,Chart 12300_20030301_US3MA1AC_20260417")
+
+
+def test_gmrt_derived_contributor_is_marked_in_provenance(tmp_path: Path) -> None:
+    result = _fetch_two_contributors(_new_provider(tmp_path), {})
+
+    entries = {v["name"]: v for v in result.attrs["provenance_dict"].values()}
+    assert entries["BlueTopo: GMRT_61m_US3MA1AD"]["derived_from"] == "gmrt"
+    assert "derived_from" not in entries["BlueTopo: H06441"]
+
+
+def test_skip_gmrt_derived_drops_only_gmrt_contributors(tmp_path: Path, caplog: Any) -> None:
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="topobathykit.providers.noaa_bluetopo"):
+        result = _fetch_two_contributors(_new_provider(tmp_path), {"skip_gmrt_derived": True})
+
+    names = {v["name"] for v in result.attrs["provenance_dict"].values()}
+    assert names == {"BlueTopo: H06441"}
+    survey_uid = next(
+        uid for uid, v in result.attrs["provenance_dict"].items() if v["name"] == "BlueTopo: H06441"
+    )
+    assert set(np.unique(result["source_id"].values)) <= {0, survey_uid}
+    assert np.isfinite(result["elevation"].values).any()
+    assert any(r.levelno == logging.INFO and "GMRT_61m_US3MA1AD" in r.getMessage() for r in caplog.records)
+
+
+def _policy(steps: list[dict[str, Any]]) -> Any:
+    from topobathykit.policy.schema import FusionPolicy
+
+    return FusionPolicy.model_validate({"name": "t", "variables": [{"name": "elevation", "steps": steps}]})
+
+
+def test_skips_gmrt_derived_only_with_a_gmrt_step() -> None:
+    bluetopo = {"provider": "noaa_bluetopo"}
+
+    with_gmrt = _policy([{"provider": "gmrt"}, bluetopo]).variables[0]
+    assert with_gmrt.skips_gmrt_derived(with_gmrt.steps[1])
+    assert not with_gmrt.skips_gmrt_derived(with_gmrt.steps[0])
+
+    without_gmrt = _policy([{"provider": "gebco_2025"}, bluetopo]).variables[0]
+    assert not without_gmrt.skips_gmrt_derived(without_gmrt.steps[1])
+
+    opted_out = _policy(
+        [{"provider": "gmrt"}, {**bluetopo, "filter": {"keep_gmrt_derived": True}}]
+    ).variables[0]
+    assert not opted_out.skips_gmrt_derived(opted_out.steps[1])
+
+
+def test_runtime_passes_skip_gmrt_derived_to_bluetopo_only() -> None:
+    """_run_cell resolves the policy-level default into the step filter it hands the provider."""
+    import contextlib
+
+    import topobathykit.runtime as runtime
+    from topobathykit.providers.base import Provider, ProviderNoDataError
+
+    seen: dict[str, dict[str, Any]] = {}
+
+    def _recording(provider_name: str) -> type[Provider]:
+        class _Recording(Provider):
+            def fetch_layer(
+                self, bbox: Any, resolution: Any = None, crs: str = "EPSG:4326", **kw: Any
+            ) -> Any:
+                seen[provider_name] = kw.get("filter", {})
+                raise ProviderNoDataError("recorded")
+
+            def get_metadata(self) -> dict[str, Any]:
+                return {"name": provider_name}
+
+        return _Recording
+
+    policy = _policy(
+        [
+            {"provider": "gmrt", "filter": {"layer": "topo-mask"}},
+            {"provider": "noaa_bluetopo", "filter": {"exclude_patterns": ["*Chart*"]}},
+        ]
+    )
+    with (
+        patch.object(runtime.registry, "get_provider_class", side_effect=_recording),
+        contextlib.suppress(Exception),  # every step is NoData; only the filters matter
+    ):
+        runtime._run_cell(policy, (-72.0, 41.0, -71.9, 41.1), 500.0, None, "EPSG:4326")
+
+    assert seen["noaa_bluetopo"]["skip_gmrt_derived"] is True
+    assert seen["noaa_bluetopo"]["exclude_patterns"] == ["*Chart*"]
+    assert "skip_gmrt_derived" not in seen["gmrt"]

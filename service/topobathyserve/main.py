@@ -2030,10 +2030,12 @@ async def analyze_coverage(
 
             elif step.provider == "noaa_bluetopo":
                 from topobathykit.providers.base import matches_pattern
+                from topobathykit.providers.noaa_bluetopo import is_gmrt_derived
 
                 w, s, east, n = provider._normalize_bbox(request.bbox)  # type: ignore[attr-defined]
 
                 seen_surveys: set[str] = set()
+                skip_gmrt = policy.variables[0].skips_gmrt_derived(step)
 
                 # If this is a very small bbox (like a point query from the UI),
                 # use the exact coordinate to resolve the specific pixel survey ID
@@ -2061,6 +2063,9 @@ async def analyze_coverage(
                         ):
                             included = False
                             reason = "Matched exclude_patterns"
+                        if included and skip_gmrt and is_gmrt_derived(survey_id):
+                            included = False
+                            reason = "GMRT-derived (the policy has a gmrt step)"
 
                         url = f"https://www.ncei.noaa.gov/maps/bathymetry/?search={survey_id.split('.')[0]}"
                         items.append({"name": name, "included": included, "reason": reason, "url": url})
@@ -2114,6 +2119,9 @@ async def analyze_coverage(
                         ):
                             included = False
                             reason = "Matched exclude_patterns"
+                        if included and skip_gmrt and is_gmrt_derived(survey_id):
+                            included = False
+                            reason = "GMRT-derived (the policy has a gmrt step)"
 
                         url = f"https://www.ncei.noaa.gov/maps/bathymetry/?search={survey_id.split('.')[0]}"
                         items.append({"name": name, "included": included, "reason": reason, "url": url})

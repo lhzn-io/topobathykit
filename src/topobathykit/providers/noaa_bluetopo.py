@@ -41,6 +41,15 @@ from .registry import registry
 
 logger = logging.getLogger(__name__)
 
+# BlueTopo fills the outer shelf with NOAA's resampled copy of GMRT, named like
+# GMRT_61m_US3MA1AD. A policy that also has a gmrt step would fuse GMRT twice.
+GMRT_DERIVED_PREFIX = "GMRT_"
+
+
+def is_gmrt_derived(survey_id: str) -> bool:
+    """Return True if a BlueTopo contributor is NOAA's resampled copy of GMRT."""
+    return survey_id.startswith(GMRT_DERIVED_PREFIX)
+
 
 class NoaaBlueTopoProvider(Provider):
     """
@@ -470,6 +479,26 @@ class NoaaBlueTopoProvider(Provider):
         include_patterns = filter_opts.get("include_patterns")
         exclude_patterns = filter_opts.get("exclude_patterns")
         max_interpolation_gap_m = filter_opts.get("max_interpolation_gap_m")
+        # Set by the runtime when the policy also has a gmrt step
+        # (VariableStrategy.skips_gmrt_derived).
+        skip_gmrt_derived = bool(filter_opts.get("skip_gmrt_derived"))
+        skipped_gmrt: set[str] = set()
+
+        def _filtered_out(survey_id: str) -> bool:
+            if include_patterns and not matches_pattern(survey_id, include_patterns):
+                return True
+            if exclude_patterns and matches_pattern(survey_id, exclude_patterns):
+                return True
+            if skip_gmrt_derived and is_gmrt_derived(survey_id):
+                skipped_gmrt.add(survey_id)
+                return True
+            return False
+
+        def _provenance(name: str, survey_id: str | None) -> dict[str, str]:
+            entry = {"name": name, "provider": "noaa_bluetopo"}
+            if survey_id and is_gmrt_derived(survey_id):
+                entry["derived_from"] = "gmrt"
+            return entry
 
         # Keep request-CRS bounds for final clipping when the caller asks for
         # a non-4326 output (e.g., web mercator tile requests).
@@ -533,24 +562,14 @@ class NoaaBlueTopoProvider(Provider):
                             survey_id = survey_id.strip()
 
                         # Apply include/exclude pattern masking
-                        if survey_id:
-                            skip = False
-                            if include_patterns and not matches_pattern(survey_id, include_patterns):
-                                skip = True
-                            if exclude_patterns and matches_pattern(survey_id, exclude_patterns):
-                                skip = True
-
-                            if skip:
-                                logger.debug(f"Skipping filtered BlueTopo source: {survey_id}")
-                                continue
+                        if survey_id and _filtered_out(survey_id):
+                            logger.debug(f"Skipping filtered BlueTopo source: {survey_id}")
+                            continue
 
                         name = f"BlueTopo: {survey_id}" if survey_id else f"BlueTopo: {tid}_{pval_int}"
                         project_uid = source_uid("noaa_bluetopo", name)
 
-                        provenance_dict[project_uid] = {
-                            "name": name,
-                            "provider": "noaa_bluetopo",
-                        }
+                        provenance_dict[project_uid] = _provenance(name, survey_id)
 
                         translated_src = xr.where(da_src == pval, project_uid, translated_src)
 
@@ -567,16 +586,9 @@ class NoaaBlueTopoProvider(Provider):
                         survey_id = survey_id.strip()
 
                     # Apply include/exclude pattern masking
-                    if survey_id:
-                        skip = False
-                        if include_patterns and not matches_pattern(survey_id, include_patterns):
-                            skip = True
-                        if exclude_patterns and matches_pattern(survey_id, exclude_patterns):
-                            skip = True
-
-                        if skip:
-                            logger.debug(f"Skipping filtered BlueTopo source: {survey_id}")
-                            continue
+                    if survey_id and _filtered_out(survey_id):
+                        logger.debug(f"Skipping filtered BlueTopo source: {survey_id}")
+                        continue
 
                     name = f"BlueTopo: {survey_id}" if survey_id else f"BlueTopo: {tid}"
 
@@ -591,8 +603,7 @@ class NoaaBlueTopoProvider(Provider):
                             res_str = match.group(1)
 
                     provenance_dict[project_uid] = {
-                        "name": name,
-                        "provider": "noaa_bluetopo",
+                        **_provenance(name, survey_id),
                         "resolution": res_str,
                     }
                     p_source = xr.where(da_elev.notnull(), project_uid, 0).astype(np.uint32)
@@ -618,6 +629,13 @@ class NoaaBlueTopoProvider(Provider):
                     logger.info(msg)
 
                 das.append(p_ds)
+
+        if skipped_gmrt:
+            logger.info(
+                f"BlueTopo: skipped {len(skipped_gmrt)} GMRT-derived contributor(s) because the "
+                f"policy has a gmrt step (set keep_gmrt_derived to keep them): "
+                f"{', '.join(sorted(skipped_gmrt))}"
+            )
 
         if not das:
             if fetch_errors:

@@ -59,7 +59,8 @@ logger = logging.getLogger(__name__)
 #   1: implicit (no attribute); nearest-neighbour canvas alignment.
 #   2: ground-resolution fetch, bilinear/average alignment, deterministic merges,
 #      BAG surveys ordered newest first.
-FUSION_ALGO_VERSION = 2
+#   3: BlueTopo's GMRT-derived contributors skipped when the policy has a gmrt step.
+FUSION_ALGO_VERSION = 3
 
 
 def _cache_algo_matches(attrs: dict[str, Any]) -> bool:
@@ -296,13 +297,17 @@ def _run_cell(
             provider_cls = registry.get_provider_class(step.provider)
             provider_instance = provider_cls()
 
+            step_filter = step.filter.model_dump() if step.filter else {}
+            if variable.skips_gmrt_derived(step):
+                step_filter["skip_gmrt_derived"] = True
+
             try:
                 # Fetch using the expanded halo bbox to ensure we grab edge data
                 fetched_data = provider_instance.fetch_layer(
                     fetch_bbox,
                     resolution=fetch_resolution_m,
                     crs="EPSG:4326",
-                    filter=step.filter.model_dump() if step.filter else {},
+                    filter=step_filter,
                 )
             except ProviderNoDataError as e:
                 logger.info(f"{step.provider}: NoData - {e}")

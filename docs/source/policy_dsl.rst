@@ -64,10 +64,11 @@ Providers can accept arbitrary metadata or filtering instructions via the ``filt
     - provider: "noaa_bluetopo"
       operation: "metric_feather"
       filter:
-        exclude_patterns: ["*.interpolated", "Chart*"]
+        exclude_patterns: ["*.interpolated", "*Chart*"]
         max_interpolation_gap_m: 15.0
 
-- **include_patterns** / **exclude_patterns**: A list of strings (supporting ``fnmatch`` wildcards like ``*``) to whitelist or blacklist specific survey IDs or URLs (e.g. omitting historical or interpolated data from BlueTopo or BAGs). For ``usgs_3dep`` the patterns match the STAC asset file name (e.g. ``USGS_13_n41w074.tif``), the same names ``/analyze`` reports.
+- **include_patterns** / **exclude_patterns**: A list of strings (supporting ``fnmatch`` wildcards like ``*``) to whitelist or blacklist specific survey IDs or URLs (e.g. omitting historical or interpolated data from BlueTopo or BAGs). For ``usgs_3dep`` the patterns match the STAC asset file name (e.g. ``USGS_13_n41w074.tif``), the same names ``/analyze`` reports. A glob must match the whole name, so a pattern for text in the middle of a name needs ``*`` on both sides. BlueTopo contributor names look like ``H11445_MB_VR_MLLW.interpolated``, ``GMRT_61m_US3MA1AD`` and ``US,US,graph,Chart 12300_20030301_US3MA1AC_20260417``: ``*.interpolated`` and ``*Chart*`` match them, ``Chart*`` does not. A pattern that starts with ``(?i)`` or ``^`` is a regular expression matched from the start of the name.
+- **keep_gmrt_derived**: ``noaa_bluetopo`` only. On the outer shelf BlueTopo carries NOAA's resampled copy of GMRT, in contributors named ``GMRT_*``. When the policy also has a ``gmrt`` step, these contributors are skipped by default so GMRT is not fused twice (the skip is logged at INFO). Set ``keep_gmrt_derived: true`` to keep them. Kept or not, they are marked ``derived_from: gmrt`` in the provenance.
 - **max_interpolation_gap_m**: Float distance in meters. Any internal `NaN` gap (data holiday) smaller than this physical distance will be natively interpolated via distance-transform morphology by the provider before it is merged. This heals "screen-door" artifacts without blurring the actual survey boundaries.
 
 Operators

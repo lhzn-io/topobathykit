@@ -8,9 +8,31 @@ from topobathykit.providers.base import (
     SOURCE_ID_BLOCK,
     SOURCE_ID_BLOCKS,
     Provider,
+    matches_pattern,
     sanitize_elevation_nodata,
     source_uid,
 )
+
+# Contributor names as they appear in BlueTopo RAT sidecars.
+CHART = "US,US,graph,Chart 12300_20030301_US3MA1AC_20260417"
+INTERPOLATED = "H11445_MB_VR_MLLW.interpolated"
+GMRT = "GMRT_61m_US3MA1AD"
+SURVEY = "H06441"
+
+
+def test_matches_pattern_globs_match_the_whole_name() -> None:
+    """A glob is anchored at both ends, so Chart* misses BlueTopo chart contributors (#56)."""
+    assert not matches_pattern(CHART, ["Chart*"])
+    assert matches_pattern(CHART, ["*Chart*"])
+    assert matches_pattern(INTERPOLATED, ["*.interpolated"])
+    assert not matches_pattern(SURVEY, ["*.interpolated", "*Chart*"])
+    assert matches_pattern(GMRT, ["GMRT_*"])
+
+
+def test_matches_pattern_regex_forms() -> None:
+    assert matches_pattern(INTERPOLATED, ["(?i).*INTERPOLATED.*"])
+    assert matches_pattern(SURVEY, ["^H0"])
+    assert not matches_pattern(GMRT, ["^H0"])
 
 
 def test_source_uid_blocks_are_disjoint_and_float32_exact() -> None:
