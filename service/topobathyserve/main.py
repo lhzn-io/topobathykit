@@ -49,6 +49,7 @@ from .models import (
     TIDReportResponse,
     TileMetadataResponse,
 )
+from .policy_catalog import POLICY_SUFFIXES, policy_summary, resolve_policy_file, saved_policies
 from .routers import cache_viewer, dem_viewer
 
 # Configure Logging
@@ -349,6 +350,22 @@ async def log_requests(request: Request, call_next: Callable[[Request], Awaitabl
     return response
 
 
+# Viewer landing routes. They are registered before the static mount, which would
+# otherwise answer every /viewer/ path first.
+@app.get("/", include_in_schema=False)
+@app.get("/viewer/", include_in_schema=False)
+async def viewer_root() -> RedirectResponse:
+    # The cache inventory is the landing page; the tile viewer is linked from it.
+    return RedirectResponse("/viewer/cache-viewer.html")
+
+
+@app.get("/viewer/index.html", include_in_schema=False)
+async def tile_viewer_old_path(request: Request) -> RedirectResponse:
+    # The tile viewer moved from index.html; keep shared links, with their map position, working.
+    query = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(f"/viewer/tile-viewer.html{query}")
+
+
 # Mount Viewer
 static_dir = Path(__file__).resolve().parent.parent / "static"
 
@@ -356,11 +373,6 @@ if static_dir.exists():
     from fastapi.staticfiles import StaticFiles
 
     app.mount("/viewer", StaticFiles(directory=str(static_dir), html=True), name="static")
-
-
-@app.get("/", include_in_schema=False)
-async def viewer_root() -> RedirectResponse:
-    return RedirectResponse("/viewer/")
 
 
 @app.get("/health")
@@ -373,6 +385,68 @@ def get_policy_path() -> Path:
     if POLICY_PATH is None or not POLICY_PATH.exists():
         raise HTTPException(status_code=503, detail="Policy path not initialized")
     return POLICY_PATH
+
+
+def get_view_policy_path(
+    default_policy: Annotated[Path, Depends(get_policy_path)],
+    policy: str | None = Query(
+        None,
+        description=(
+            "Policy file name to render with, as listed by GET /policies. "
+            "Defaults to the service's configured policy."
+        ),
+    ),
+) -> Path:
+    """The policy a viewer request names, or the service default when it names none.
+
+    A named policy is looked up only by bare file name, beside the default policy and then
+    among the policies saved in the cache.
+    """
+    if policy is None:
+        return default_policy
+    path = resolve_policy_file(policy, [default_policy.parent, get_cache_root() / "policies"])
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"Unknown policy '{policy}'; see GET /policies")
+    return path
+
+
+@app.get("/policies")
+def list_policies(default_policy: Annotated[Path, Depends(get_policy_path)]) -> dict[str, Any]:
+    """Policies the tile viewer can render with, by the file name its ``policy`` parameter takes.
+
+    ``files`` are the YAML files beside the configured policy. ``cached`` are the copies fusion
+    saved in the cache for each policy that has fused cells, with the cell count and newest
+    cell write, so several revisions of one policy name can be told apart.
+    """
+    files: list[dict[str, Any]] = []
+    for path in sorted(default_policy.parent.iterdir()):
+        if path.is_file() and path.suffix in POLICY_SUFFIXES:
+            files.append({**policy_summary(path), "default": path == default_policy})
+
+    cached: list[dict[str, Any]] = []
+    cache_root = get_cache_root()
+    fused_root = cache_root / "fused_zarr"
+    for dir_name, path in saved_policies(cache_root / "policies").items():
+        cell_dir = fused_root / dir_name
+        if not cell_dir.is_dir():
+            continue
+        cells = [c for c in cell_dir.iterdir() if c.suffix == ".zarr"]
+        if not cells:
+            continue
+        newest = max(c.stat().st_mtime for c in cells)
+        cached.append(
+            {
+                **policy_summary(path),
+                "cache_dir": dir_name,
+                "cell_count": len(cells),
+                "updated": datetime.fromtimestamp(newest, UTC).isoformat(timespec="seconds"),
+            }
+        )
+    # Grouped by policy name, newest first within a name (both sorts are stable).
+    cached.sort(key=lambda p: p["updated"], reverse=True)
+    cached.sort(key=lambda p: (p["policy_name"] or "").lower())
+
+    return {"default": default_policy.name, "files": files, "cached": cached}
 
 
 @app.post("/policy/update")
@@ -823,7 +897,7 @@ def render_png(
 
 
 @app.get("/legend")
-async def get_legend(policy_path: Annotated[Path, Depends(get_policy_path)]) -> dict[str, Any]:
+async def get_legend(policy_path: Annotated[Path, Depends(get_view_policy_path)]) -> dict[str, Any]:
     """
     Returns the legend mapping (Provider Name -> Color Hex) for the active policy.
     Used by the frontend to render the dynamic legend.
@@ -868,7 +942,7 @@ async def get_legend(policy_path: Annotated[Path, Depends(get_policy_path)]) -> 
 async def get_elevation(
     lat: float,
     lon: float,
-    policy_path: Annotated[Path, Depends(get_policy_path)],
+    policy_path: Annotated[Path, Depends(get_view_policy_path)],
     zoom: int | None = Query(None, description="Preferred zoom level/resolution to check in cache"),
 ) -> ElevationResponse:
     try:
@@ -986,7 +1060,7 @@ async def get_elevation(
 
 @app.get("/source_info")
 async def get_source_info(
-    lat: float, lon: float, policy_path: Annotated[Path, Depends(get_policy_path)]
+    lat: float, lon: float, policy_path: Annotated[Path, Depends(get_view_policy_path)]
 ) -> dict[str, str]:
     try:
         delta = 0.00015
@@ -1092,7 +1166,7 @@ def get_tile_metadata(
     z: int,
     x: int,
     y: int,
-    policy_path: Annotated[Path, Depends(get_policy_path)],
+    policy_path: Annotated[Path, Depends(get_view_policy_path)],
     lidar_url: str | None = None,
     ept_url: str | None = None,
     use_seam_blending: bool = True,
@@ -1170,7 +1244,7 @@ def get_tile_pixel_source(
     y: int,
     lat: float,
     lon: float,
-    policy_path: Annotated[Path, Depends(get_policy_path)],
+    policy_path: Annotated[Path, Depends(get_view_policy_path)],
     style: str = Query("default"),
     vmin: float | None = Query(None),
     vmax: float | None = Query(None),
@@ -1242,7 +1316,7 @@ def get_xyz_tile(
     z: int,
     x: int,
     y: int,
-    policy_path: Annotated[Path, Depends(get_policy_path)],
+    policy_path: Annotated[Path, Depends(get_view_policy_path)],
     format: str = "tiff",
     lidar_url: str | None = None,
     ept_url: str | None = None,

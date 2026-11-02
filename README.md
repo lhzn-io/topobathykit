@@ -150,7 +150,11 @@ Open the viewer:
 
 - <http://localhost:9595/viewer>
 
-Use the viewer to:
+It opens on the cache inventory, which links to the 3D DEM viewer, the tile viewer and the hydrate
+tool. The DEM viewer lists each fused dataset under its policy name, version and cache key; the tile
+viewer renders nothing until a fusion policy is chosen.
+
+Use the viewers to:
 
 - inspect seams and coverage
 - switch to **provenance/source** view

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,7 @@ import xarray as xr
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 from topobathyserve.models import DEMQualityReport
+from topobathyserve.policy_catalog import NO_POLICY_SUMMARY, policy_summary, saved_policies
 
 from topobathykit.config import get_cache_root
 from topobathykit.quality import calculate_spatial_stats
@@ -882,12 +884,17 @@ def _list_datasets_sync(root: Path, source_filter: str | set[str] | None = None)
         return []
 
     datasets: list[dict[str, Any]] = []
+    # Fusion saves each policy beside the cache, named after its fused_zarr directory.
+    policy_files = saved_policies(root.parent / "policies")
     for policy_dir in sorted(root.iterdir()):
         if not policy_dir.is_dir():
             continue
         cells = sorted(policy_dir.glob("*.zarr"))
         if not cells:
             continue
+
+        policy_file = policy_files.get(policy_dir.name)
+        policy_info = policy_summary(policy_file) if policy_file is not None else dict(NO_POLICY_SUMMARY)
 
         res_groups: dict[str, list[tuple[Path, dict[str, Any]]]] = {}
         for cell_path in cells:
@@ -948,10 +955,17 @@ def _list_datasets_sync(root: Path, source_filter: str | set[str] | None = None)
 
                 suffix = f"_{cluster_idx}" if len(clusters) > 1 else ""
                 dataset_id = f"{policy_hash[:8]}_{res_m:.0f}m{suffix}"
+                # Newest cell write (UTC), to tell re-hydrations of one policy apart.
+                newest = max((_cell_mtime(p) for p, _ in cluster), default=0.0)
+                updated = (
+                    datetime.fromtimestamp(newest, UTC).isoformat(timespec="seconds") if newest else None
+                )
 
                 datasets.append(
                     {
                         "id": dataset_id,
+                        **policy_info,
+                        "updated": updated,
                         "policy_hash": policy_hash[:8],
                         "policy_hash_full": policy_hash,
                         "crs": crs,

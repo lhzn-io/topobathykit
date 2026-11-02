@@ -87,7 +87,7 @@
             <div>
                 <h3>TopoBathy Viewer</h3>
                 <div style="font-size: 11px; color: #777; margin-top: 2px;">
-                    Fused Lidar/Bathy (v0.2) | <a href="/viewer/cache-viewer.html" target="_blank" style="text-decoration:none; color:#0366d6;">Cache Manager ↗</a>
+                    Fused Lidar/Bathy (v0.2) | <a href="/viewer/cache-viewer.html" style="text-decoration:none; color:#0366d6;">Cache Manager</a> | <a href="/viewer/dem-viewer.html" style="text-decoration:none; color:#0366d6;">DEM Viewer</a>
                 </div>
             </div>
             <button id="toggle-controls" class="icon-btn" title="Toggle Controls">−</button>
@@ -95,6 +95,16 @@
 
         <div id="controls-content">
             <p style="font-size: 13px; margin-top: 8px;"><i>Auto-Lookup active for US Coastal Lidar (STAC/3DEP)</i></p>
+
+            <div style="margin-top: 10px; margin-bottom: 10px;">
+                <label for="policy-select" style="font-size: 14px; font-weight: bold;">Fusion Policy:</label>
+                <select id="policy-select" style="width: 100%; padding: 5px; margin-top: 5px;">
+                    <option value="">Loading policies...</option>
+                </select>
+                <div id="policy-info" style="font-size: 11px; color: #777; margin-top: 4px;">
+                    Tiles render once a policy is chosen.
+                </div>
+            </div>
 
             <div style="margin-top: 10px; margin-bottom: 10px;">
                 <label for="style-select" style="font-size: 14px; font-weight: bold;">Colormap:</label>
@@ -180,6 +190,19 @@
             initStyle = params.get('style');
         }
 
+        // Policy file the tiles are rendered with. Nothing renders until one is chosen,
+        // either from the selector or from a ?policy= link.
+        var currentPolicy = '';
+        var initPolicy = params.get('policy') || '';
+
+        function policyQuery() {
+            return 'policy=' + encodeURIComponent(currentPolicy);
+        }
+
+        function bathyUrl(style) {
+            return '/tiles/{z}/{x}/{y}?format=png&style=' + style + '&' + policyQuery();
+        }
+
         var map = L.map('map', { minZoom: 10 });
 
         if (initBounds) {
@@ -217,6 +240,12 @@
                 url.searchParams.delete('style');
             }
 
+            if (currentPolicy) {
+                url.searchParams.set('policy', currentPolicy);
+            } else {
+                url.searchParams.delete('policy');
+            }
+
             window.history.replaceState({}, '', url);
         }
 
@@ -240,18 +269,16 @@
         }).addTo(map);
 
         // TopoBathyServe Tile Layer
-        // format=png triggers server-side rendering
-        var bathyUrlTemplate = '/tiles/{z}/{x}/{y}?format=png&style={style}';
-
-        var bathyLayer = L.tileLayer(bathyUrlTemplate, {
+        // format=png triggers server-side rendering. The layers are created here but only
+        // added to the map once a policy is chosen (see setPolicy).
+        var bathyLayer = L.tileLayer(bathyUrl(initStyle), {
             maxZoom: 20,
             opacity: 0.7,
-            attribution: 'TopoBathyServe',
-            style: initStyle // Leaflet util will replace {style} in url
-        }).addTo(map);
+            attribution: 'TopoBathyServe'
+        });
 
         // Contour Layer
-        var contourLayer = L.tileLayer('/tiles/{z}/{x}/{y}?format=png&style=contours', {
+        var contourLayer = L.tileLayer('/tiles/{z}/{x}/{y}?format=png&style=contours&' + policyQuery(), {
             maxZoom: 20,
             opacity: 1.0,
 
@@ -278,7 +305,7 @@
         var basemapSelect = document.getElementById('basemap-select');
 
         contourToggle.addEventListener('change', function () {
-            if (this.checked) {
+            if (this.checked && currentPolicy) {
                 contourLayer.addTo(map);
             } else {
                 map.removeLayer(contourLayer);
@@ -286,7 +313,7 @@
         });
 
         bathyToggle.addEventListener('change', function () {
-            if (this.checked) {
+            if (this.checked && currentPolicy) {
                 bathyLayer.addTo(map);
             } else {
                 map.removeLayer(bathyLayer);
@@ -322,13 +349,13 @@
             var legendContainer = document.querySelector('#legend-source .legend-items');
             if (!legendContainer) return;
 
+            if (!currentPolicy) {
+                legendContainer.innerHTML = '<i>Choose a policy to see its sources.</i>';
+                return;
+            }
             legendContainer.innerHTML = '<i>Loading legend...</i>';
 
-            // Get policy params from URL if any (not supported yet in URL, but backend uses default or env)
-            // Ideally we pass ?policy_path=... if user selects one.
-            // For now, just hit /legend which uses the active policy.
-
-            fetch('/legend')
+            fetch('/legend?' + policyQuery())
                 .then(response => response.json())
                 .then(data => {
                     var html = '';
@@ -359,24 +386,10 @@
         styleSelect.value = initStyle;
         updateLegend(initStyle);
 
-        // Pre-fetch legend data on page load so window.layerColors / layerPriority are ready
-        // before the user clicks any tile (works even when style != "source").
-        fetchSourceLegend();
-
         styleSelect.addEventListener('change', function () {
             var newStyle = this.value;
-            // Update Layer
-            bathyLayer.options.style = newStyle;
-            bathyLayer.redraw(); // Force redraw might not work if URL doesn't change?
-            // Leaflet tileLayer doesn't automatically watch options for URL param changes unless using a plugin.
-            // We need to setUrl.
-            // But setUrl expects the template.
-            // We can just use the template and pass the options I guess?
-            // Actually, simplest is to reset the URL with the new param hardcoded or baked in.
-
-            // Re-construct URL with new style
-            // We use 'setUrl' but we need to keep the xyz placeholders.
-            bathyLayer.setUrl('/tiles/{z}/{x}/{y}?format=png&style=' + newStyle);
+            // Leaflet does not watch options for URL changes, so rebuild the URL template.
+            bathyLayer.setUrl(bathyUrl(newStyle));
 
             updateLegend(newStyle);
 
@@ -388,11 +401,105 @@
             "Satellite": satellite
         };
 
-        var overlayMaps = {
-            "Fused Elevation": bathyLayer
-        };
+        // The elevation overlay joins the layer control once a policy is chosen.
+        var layersControl = L.control.layers(baseMaps, {}).addTo(map);
+        var overlayRegistered = false;
 
-        L.control.layers(baseMaps, overlayMaps).addTo(map);
+        // --- Policy Chooser ---
+        var policySelect = document.getElementById('policy-select');
+        var policyInfo = document.getElementById('policy-info');
+        var policyDetails = {};
+
+        function shortDate(iso) {
+            return iso ? iso.slice(0, 16).replace('T', ' ') + ' UTC' : '';
+        }
+
+        function setPolicy(file) {
+            currentPolicy = file;
+            var info = policyDetails[file];
+            if (!file) {
+                policyInfo.textContent = 'Tiles render once a policy is chosen.';
+                map.removeLayer(bathyLayer);
+                map.removeLayer(contourLayer);
+            } else {
+                var lines = [file];
+                if (info && info.policy_description) lines.push(info.policy_description);
+                policyInfo.textContent = lines.join(' | ');
+                policyInfo.title = lines.join('\n');
+                bathyLayer.setUrl(bathyUrl(styleSelect.value));
+                contourLayer.setUrl('/tiles/{z}/{x}/{y}?format=png&style=contours&' + policyQuery());
+                if (!overlayRegistered) {
+                    layersControl.addOverlay(bathyLayer, 'Fused Elevation');
+                    overlayRegistered = true;
+                }
+                if (bathyToggle.checked) bathyLayer.addTo(map);
+                if (contourToggle.checked) contourLayer.addTo(map);
+            }
+            // Legend colours are used by the click popup too, so fetch them for every style.
+            fetchSourceLegend();
+            updateUrl();
+        }
+
+        function policyOption(p, label) {
+            var opt = document.createElement('option');
+            opt.value = p.policy_file;
+            opt.textContent = label;
+            opt.title = [p.policy_file, p.policy_description].filter(Boolean).join('\n');
+            policyDetails[p.policy_file] = p;
+            return opt;
+        }
+
+        function loadPolicies() {
+            fetch('/policies')
+                .then(function (r) { if (!r.ok) throw new Error(r.statusText); return r.json(); })
+                .then(function (data) {
+                    policySelect.innerHTML = '';
+                    var placeholder = document.createElement('option');
+                    placeholder.value = '';
+                    placeholder.textContent = 'Choose a policy...';
+                    policySelect.appendChild(placeholder);
+
+                    if (data.files && data.files.length) {
+                        var g = document.createElement('optgroup');
+                        g.label = 'Policy files';
+                        data.files.forEach(function (p) {
+                            var label = (p.policy_name || p.policy_file) +
+                                (p.policy_version ? ' v' + p.policy_version : '') +
+                                ' (' + p.policy_file + (p.default ? ', service default' : '') + ')';
+                            g.appendChild(policyOption(p, label));
+                        });
+                        policySelect.appendChild(g);
+                    }
+                    if (data.cached && data.cached.length) {
+                        var gc = document.createElement('optgroup');
+                        gc.label = 'Fused in the cache';
+                        data.cached.forEach(function (p) {
+                            var label = (p.policy_name || p.policy_file) +
+                                (p.policy_version ? ' v' + p.policy_version : '') +
+                                ' | ' + p.cache_dir + ' | ' + p.cell_count + ' cells | ' + shortDate(p.updated);
+                            gc.appendChild(policyOption(p, label));
+                        });
+                        policySelect.appendChild(gc);
+                    }
+
+                    if (initPolicy && policyDetails[initPolicy]) {
+                        policySelect.value = initPolicy;
+                        setPolicy(initPolicy);
+                    } else {
+                        if (initPolicy) {
+                            policyInfo.textContent = 'Policy ' + initPolicy + ' from the link is not available; choose one.';
+                        }
+                        fetchSourceLegend();
+                    }
+                })
+                .catch(function (err) {
+                    policySelect.innerHTML = '<option value="">Failed to load policies</option>';
+                    console.error(err);
+                });
+        }
+
+        policySelect.addEventListener('change', function () { setPolicy(this.value); });
+        loadPolicies();
 
         // --- Click to Identify ---
         function latLonToTile(lat, lon, zoom) {
@@ -416,12 +523,22 @@
             var zoom = map.getZoom();
             var tile = latLonToTile(lat, lng, zoom);
 
+            // Point queries fuse with the chosen policy too, so wait for one.
+            if (!currentPolicy) {
+                L.popup()
+                    .setLatLng(e.latlng)
+                    .setContent('<div style="font-size:13px;">Choose a fusion policy to query this point.</div>')
+                    .openOn(map);
+                return;
+            }
+
             var currentStyle = document.getElementById('style-select').value;
+            var pq = policyQuery();
 
             // Construct URLs
-            var tileUrl = `/tiles/${tile.z}/${tile.x}/${tile.y}?format=npy&style=${currentStyle}`;
-            var viewUrl = `/tiles/${tile.z}/${tile.x}/${tile.y}?format=png&style=${currentStyle}`;
-            var metaUrl = `/tiles/${tile.z}/${tile.x}/${tile.y}/metadata?style=${currentStyle}`;
+            var tileUrl = `/tiles/${tile.z}/${tile.x}/${tile.y}?format=npy&style=${currentStyle}&${pq}`;
+            var viewUrl = `/tiles/${tile.z}/${tile.x}/${tile.y}?format=png&style=${currentStyle}&${pq}`;
+            var metaUrl = `/tiles/${tile.z}/${tile.x}/${tile.y}/metadata?style=${currentStyle}&${pq}`;
 
             // Unique IDs for this specific click to avoid collisions if clicking same tile twice
             // using a timestamp or random suffix
@@ -456,7 +573,7 @@
                 .openOn(map);
 
             // Fetch Elevation
-            var elevationUrl = `/elevation?lat=${lat}&lon=${lng}`;
+            var elevationUrl = `/elevation?lat=${lat}&lon=${lng}&${pq}`;
             if (zoom >= 13) {
                 // If zoomed in, suggest the current zoom level for cache hit parity
                 elevationUrl += `&zoom=${zoom}`;
@@ -494,7 +611,7 @@
             }
 
             // Fetch Pixel-Level Source
-            fetch(`/tiles/${tile.z}/${tile.x}/${tile.y}/pixel?lat=${lat}&lon=${lng}&style=${currentStyle}`, { signal })
+            fetch(`/tiles/${tile.z}/${tile.x}/${tile.y}/pixel?lat=${lat}&lon=${lng}&style=${currentStyle}&${pq}`, { signal })
                 .then(response => { if (!response.ok) return null; return response.json(); })
                 .then(data => {
                     if (!data || !data.source) return;
