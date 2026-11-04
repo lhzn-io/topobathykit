@@ -202,7 +202,13 @@ const nav = createVantage({
 nav.readLink();
 
 // ── Lighting ──
-scene.add(new THREE.AmbientLight(0x404050, 0.6));
+// Hemisphere fill in place of a flat ambient: faces pointing up get the same fill as before,
+// faces pointing down (the underside, seen from below the surface) get a warm tint instead of
+// near black, so flying under the terrain shows where you are.
+scene.add(new THREE.HemisphereLight(0x404050, 0xb08a60, 0.6));
+const underLight = new THREE.DirectionalLight(0xffe0c0, 0.6);   // lights only downward faces
+underLight.position.set(-100, -400, 200);
+scene.add(underLight);
 const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
 dirLight.position.set(200, 400, 300);
 scene.add(dirLight);
