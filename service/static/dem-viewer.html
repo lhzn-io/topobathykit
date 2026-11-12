@@ -156,7 +156,7 @@
         "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
         "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
         "camera-controls": "https://cdn.jsdelivr.net/npm/camera-controls@3.1.2/dist/camera-controls.module.min.js",
-        "vantagekit/three": "https://cdn.jsdelivr.net/gh/lhzn-io/vantagekit@v0.3.0/vantagekit-three.js"
+        "vantagekit/three": "https://cdn.jsdelivr.net/gh/lhzn-io/vantagekit@v0.8.1/vantagekit-three.js"
     }
 }
 </script>
@@ -189,10 +189,10 @@ camera.position.set(0, 300, 400);
 
 // Navigation (vantagekit on camera-controls): left drag pans, right drag rotates, the wheel
 // zooms toward the cursor and keeps going past the closest distance; WASD/QE and a gamepad move
-// at a speed set in metres per second. The camera is kept in the URL for sharing.
+// at a speed set in meters per second. The camera is kept in the URL for sharing.
 const nav = createVantage({
     THREE, CameraControls, camera, dom: canvas,
-    metresPerUnit: 100,               // SCENE_SCALE = 0.01 scene units per metre
+    metersPerUnit: 100,               // SCENE_SCALE = 0.01 scene units per meter
     exaggeration: () => meshExag || 1,
     mouse: 'pan-left',
     minDistance: 0.5,                 // 50 m; the near plane is 10 m
