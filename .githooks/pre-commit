@@ -1,3 +1,4 @@
 #!/bin/sh
-# Lint and type-check the staged files before each commit.
+# The clone's own pre-commit hook, if any, then lint and type-check the staged files.
+"$(dirname "$0")/run-local" pre-commit "$@" || exit $?
 exec "$(dirname "$0")/run-hooks" run --hook-stage pre-commit

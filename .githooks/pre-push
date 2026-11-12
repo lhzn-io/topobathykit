@@ -1,3 +1,6 @@
 #!/bin/sh
-# Run every hook on the whole tree before a push, exactly as CI's Lint job does.
-exec "$(dirname "$0")/run-hooks" run --all-files --show-diff-on-failure
+# The clone's own pre-push hook, if any, then every hook on the whole tree, exactly
+# as CI's Lint job runs them. Git passes the refs being pushed on stdin; only the
+# clone's hook reads them.
+"$(dirname "$0")/run-local" pre-push "$@" || exit $?
+exec "$(dirname "$0")/run-hooks" run --all-files --show-diff-on-failure </dev/null

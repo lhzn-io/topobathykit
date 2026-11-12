@@ -1,0 +1,4 @@
+#!/bin/sh
+# The clone's own commit-msg hook, if any (for example the git-operations
+# attribution check). The repository adds no commit-msg rules of its own.
+exec "$(dirname "$0")/run-local" commit-msg "$@"

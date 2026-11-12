@@ -1,0 +1,16 @@
+#!/bin/sh
+# Runs the clone's own hook of the given name from .git/hooks, if it is present
+# and executable. Setting core.hooksPath stops git from running those hooks
+# (for example the git-operations attribution checks), so each hook in this
+# directory calls them through here first.
+#
+# Usage: run-local <hook-name> [args...]
+#
+# GITHOOKS_CHAINED stops a loop when a .git/hooks script itself calls back into
+# this directory.
+name=$1
+shift
+[ -n "$GITHOOKS_CHAINED" ] && exit 0
+hook="$(git rev-parse --git-common-dir)/hooks/$name"
+[ -x "$hook" ] || exit 0
+GITHOOKS_CHAINED=1 exec "$hook" "$@"

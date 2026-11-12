@@ -124,7 +124,7 @@ Enable the repository's git hooks once per clone:
 git config core.hooksPath .githooks
 ```
 
-The `pre-commit` hook checks staged files before each commit, and the `pre-push` hook runs every hook on the whole tree before each push, as CI does. The mypy hook needs `mypy` on `PATH` with the project's packages importable. An activated environment that has `pre-commit` and `mypy` (the micromamba setup, plus `pip install pre-commit`) is used as is; otherwise the hooks run both through [uv](https://docs.astral.sh/uv/) over the project's `.venv`. To run them by hand:
+The `pre-commit` hook checks staged files before each commit, and the `pre-push` hook runs every hook on the whole tree before each push, as CI does. With `core.hooksPath` set, git no longer runs the clone's own hooks in `.git/hooks`, so each tracked hook (`pre-commit`, `pre-push`, `commit-msg`) first runs the clone's hook of the same name when one is present and executable. The mypy hook needs `mypy` on `PATH` with the project's packages importable. An activated environment that has `pre-commit` and `mypy` (the micromamba setup, plus `pip install pre-commit`) is used as is; otherwise the hooks run both through [uv](https://docs.astral.sh/uv/) over the project's `.venv`. To run them by hand:
 
 ```bash
 .githooks/run-hooks run --all-files
