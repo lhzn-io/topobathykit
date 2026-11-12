@@ -268,7 +268,7 @@ def _slice_and_downsample(content: bytes, dtype: type, meta: dict[str, Any], gri
     out_h, out_w = grid["height"], grid["width"]
     if (row0, row1, col0, col1, out_h, out_w) == (0, full_h, 0, full_w, full_h, full_w):
         return content
-    canvas = np.frombuffer(content, dtype=dtype).reshape(full_h, full_w)[row0:row1, col0:col1]
+    canvas: np.ndarray = np.frombuffer(content, dtype=dtype).reshape(full_h, full_w)[row0:row1, col0:col1]
     if canvas.shape != (out_h, out_w):
         canvas = _downsample_nearest(canvas, out_h, out_w)
     return np.ascontiguousarray(canvas).tobytes()

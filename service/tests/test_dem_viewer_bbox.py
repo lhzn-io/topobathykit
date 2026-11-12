@@ -67,7 +67,7 @@ def large(policy_dir: Path) -> Path:
     return policy_dir
 
 
-def _get(**params: object) -> tuple[dict, np.ndarray, np.ndarray]:
+def _get(**params: str | int) -> tuple[dict, np.ndarray, np.ndarray]:
     meta = client.get(f"{BASE}/meta", params=params)
     elev = client.get(f"{BASE}/elevation.bin", params=params)
     prov = client.get(f"{BASE}/provenance.bin", params=params)
@@ -116,7 +116,7 @@ def test_bbox_overhanging_the_dataset_is_clipped_to_it(small: Path) -> None:
 
 @pytest.mark.parametrize("max_dim", [None, 64, 100])
 def test_elevation_length_matches_meta_for_bbox_and_max_dim(large: Path, max_dim: int | None) -> None:
-    params: dict[str, object] = {"bbox": "20.4,10,170.2,90"}
+    params: dict[str, str | int] = {"bbox": "20.4,10,170.2,90"}
     if max_dim is not None:
         params["max_dim"] = max_dim
     meta, elev, prov = _get(**params)
@@ -141,7 +141,7 @@ def test_max_dim_applies_to_the_crop_not_the_dataset(large: Path) -> None:
 
 
 def test_headers_match_meta(large: Path) -> None:
-    params = {"bbox": "20.4,10,170.2,90", "max_dim": 64}
+    params: dict[str, str | int] = {"bbox": "20.4,10,170.2,90", "max_dim": 64}
     meta = client.get(f"{BASE}/meta", params=params).json()
     elev = client.get(f"{BASE}/elevation.bin", params=params)
     assert elev.headers["X-Grid-Width"] == str(meta["width"])
