@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import numpy as np
 import xarray as xr
@@ -160,6 +160,118 @@ def _clamp_dims(width: int, height: int, max_dim: int | None) -> tuple[int, int,
         return width, height, 1.0
     scale = max_dim / max(width, height)
     return max(1, int(round(width * scale))), max(1, int(round(height * scale))), scale
+
+
+MaxDim = Annotated[int | None, Query(ge=64, le=16384, description="Cap grid dimensions for LoD rendering")]
+BBox = Annotated[
+    str | None,
+    Query(
+        description=(
+            "Crop to west,south,east,north in the units of the dataset bounds (degrees for "
+            "geographic datasets) before max_dim is applied"
+        ),
+        examples=["-70.9,41.2,-70.4,41.6"],
+    ),
+]
+
+
+def _parse_bbox(bbox: str | None) -> tuple[float, float, float, float] | None:
+    """Parse a ``west,south,east,north`` query value; 422 when malformed."""
+    if bbox is None:
+        return None
+    try:
+        parts = [float(p) for p in bbox.split(",")]
+    except ValueError:
+        parts = []
+    if len(parts) != 4 or not all(np.isfinite(parts)):
+        raise HTTPException(status_code=422, detail="bbox must be four numbers: west,south,east,north")
+    west, south, east, north = parts
+    if west >= east or south >= north:
+        raise HTTPException(status_code=422, detail="bbox needs west < east and south < north")
+    return west, south, east, north
+
+
+def _crop_window(
+    bounds: list[float], width: int, height: int, bbox: tuple[float, float, float, float]
+) -> tuple[int, int, int, int, list[float]]:
+    """Return the canvas window ``(row0, row1, col0, col1)`` (half-open) covering *bbox*.
+
+    The canvas spans *bounds* with its first and last pixels on the bounds' edges, so
+    pixel ``i`` sits at ``west + i * (east - west) / (width - 1)``.  The window is the
+    smallest one whose pixels enclose the part of *bbox* inside the dataset, and the
+    returned bounds are those of its edge pixels.  A bbox that misses the dataset is a 400.
+    """
+    west, south, east, north = bounds
+    bw, bs, be, bn = bbox
+    if be < west or bw > east or bn < south or bs > north:
+        raise HTTPException(
+            status_code=400,
+            detail=f"bbox {list(bbox)} does not intersect the dataset bounds {bounds}",
+        )
+    px = (east - west) / (width - 1) if width > 1 else 0.0
+    py = (north - south) / (height - 1) if height > 1 else 0.0
+
+    def span(lo: float, hi: float, step: float, n: int) -> tuple[int, int]:
+        """Half-open pixel range enclosing offsets [lo, hi] from the first pixel."""
+        if step <= 0:
+            return 0, n
+        i0 = int(np.floor(lo / step + 1e-9))
+        i1 = int(np.ceil(hi / step - 1e-9))
+        return max(0, i0), min(n, i1 + 1)
+
+    col0, col1 = span(max(bw, west) - west, min(be, east) - west, px, width)
+    # Rows count down from the north edge.
+    row0, row1 = span(north - min(bn, north), north - max(bs, south), py, height)
+    crop_bounds = [
+        west + col0 * px,
+        north - (row1 - 1) * py,
+        west + (col1 - 1) * px,
+        north - row0 * py,
+    ]
+    return row0, row1, col0, col1, crop_bounds
+
+
+def _window_grid(
+    meta: dict[str, Any], max_dim: int | None, bbox: tuple[float, float, float, float] | None
+) -> dict[str, Any]:
+    """Apply an optional bbox crop, then the max_dim LoD cap, to a full-dataset meta.
+
+    *meta* describes the build-capped canvas (``full_width`` x ``full_height`` over
+    ``bounds`` at ``full_dx`` x ``full_dy``).  The result holds the output ``width``,
+    ``height``, ``bounds``, ``dx``, ``dy`` and LoD ``scale``, plus the canvas ``window``
+    ``(row0, row1, col0, col1)`` that the binaries slice before downsampling.
+    """
+    full_w, full_h = meta["full_width"], meta["full_height"]
+    bounds = list(meta["bounds"])
+    full_dx, full_dy = meta["full_dx"], meta["full_dy"]
+    window = (0, full_h, 0, full_w)
+    if bbox is not None:
+        row0, row1, col0, col1, bounds = _crop_window(bounds, full_w, full_h, bbox)
+        window = (row0, row1, col0, col1)
+    crop_w, crop_h = window[3] - window[2], window[1] - window[0]
+    out_w, out_h, lod_scale = _clamp_dims(crop_w, crop_h, max_dim)
+    return {
+        "width": out_w,
+        "height": out_h,
+        "scale": lod_scale,
+        "bounds": bounds,
+        "dx": full_dx / lod_scale if lod_scale > 0 else full_dx,
+        "dy": full_dy / lod_scale if lod_scale > 0 else full_dy,
+        "window": window,
+    }
+
+
+def _slice_and_downsample(content: bytes, dtype: type, meta: dict[str, Any], grid: dict[str, Any]) -> bytes:
+    """Cut *grid*'s window out of the full canvas bytes and downsample it to *grid*'s size."""
+    full_w, full_h = meta["full_width"], meta["full_height"]
+    row0, row1, col0, col1 = grid["window"]
+    out_h, out_w = grid["height"], grid["width"]
+    if (row0, row1, col0, col1, out_h, out_w) == (0, full_h, 0, full_w, full_h, full_w):
+        return content
+    canvas = np.frombuffer(content, dtype=dtype).reshape(full_h, full_w)[row0:row1, col0:col1]
+    if canvas.shape != (out_h, out_w):
+        canvas = _downsample_nearest(canvas, out_h, out_w)
+    return np.ascontiguousarray(canvas).tobytes()
 
 
 @router.get("/datasets")
@@ -386,15 +498,28 @@ def _cell_in_cluster(attrs: dict[str, Any], cluster_bbox: list[float] | None) ->
 @router.get("/datasets/{dataset_id}/meta")
 async def get_dataset_meta(
     dataset_id: str,
-    max_dim: int | None = Query(None, ge=64, le=16384, description="Cap grid dimensions for LoD rendering"),
+    max_dim: MaxDim = None,
+    bbox: BBox = None,
 ) -> dict[str, Any]:
     """Return metadata for a fused dataset.
 
-    When ``max_dim`` is supplied the returned ``width``, ``height``, ``dx``, and ``dy``
-    reflect the *downsampled* grid that ``elevation.bin`` and ``provenance.bin`` will
-    serve for the same ``max_dim`` value.  Pass the same value to all three endpoints
-    so buffer-length checks remain consistent.
+    When ``bbox`` is supplied the grid is first cropped to the pixels enclosing it, and
+    ``bounds`` reports the cropped extent.  When ``max_dim`` is supplied the returned
+    ``width``, ``height``, ``dx``, and ``dy`` reflect the *downsampled* grid (of the crop,
+    if any) that ``elevation.bin`` and ``provenance.bin`` will serve for the same
+    ``bbox`` and ``max_dim``.  Pass the same values to all three endpoints so
+    buffer-length checks remain consistent.  ``full_width`` and ``full_height`` always
+    describe the whole build-capped canvas.  Elevations are in ``units`` (metres).
     """
+    meta = _full_dataset_meta(dataset_id)
+    grid = _window_grid(meta, max_dim, _parse_bbox(bbox))
+    meta.update({k: grid[k] for k in ("width", "height", "scale", "bounds", "dx", "dy")})
+    del meta["full_dx"], meta["full_dy"]
+    return meta
+
+
+def _full_dataset_meta(dataset_id: str) -> dict[str, Any]:
+    """Metadata for the whole build-capped canvas, before any bbox crop or LoD cap."""
     root = _fused_zarr_root()
     policy_prefix, dx, dy, cluster_bbox = _parse_dataset_id(root, dataset_id)
     policy_dir = _resolve_policy_dir(root, policy_prefix)
@@ -477,20 +602,18 @@ async def get_dataset_meta(
     build_dx = geo_dx / _build_scale if _build_scale > 0 else geo_dx
     build_dy = geo_dy / _build_scale if _build_scale > 0 else geo_dy
 
-    # Then apply optional viewer-level LoD on top
-    out_w, out_h, lod_scale = _clamp_dims(build_w, build_h, max_dim)
-    out_dx = build_dx / lod_scale if lod_scale > 0 else build_dx
-    out_dy = build_dy / lod_scale if lod_scale > 0 else build_dy
-
     return {
-        "width": out_w,
-        "height": out_h,
+        "width": build_w,
+        "height": build_h,
         "full_width": build_w,
         "full_height": build_h,
-        "scale": lod_scale,
+        "scale": 1.0,
         "bounds": bounds,
-        "dx": out_dx,
-        "dy": out_dy,
+        "dx": build_dx,
+        "dy": build_dy,
+        "full_dx": build_dx,
+        "full_dy": build_dy,
+        "units": "m",
         "crs": crs,
         "cell_count": cell_count,
         "policy_legend": legend,
@@ -501,7 +624,8 @@ async def get_dataset_meta(
 @router.get("/datasets/{dataset_id}/elevation.bin")
 async def get_elevation_binary(
     dataset_id: str,
-    max_dim: int | None = Query(None, ge=64, le=16384, description="Cap grid dimensions for LoD rendering"),
+    max_dim: MaxDim = None,
+    bbox: BBox = None,
 ) -> Response:
     """Return the mosaiced elevation grid as a raw Float32 binary (north-first).
 
@@ -512,7 +636,15 @@ async def get_elevation_binary(
     Pass ``max_dim`` to receive a nearest-neighbour downsampled grid whose longest
     dimension is at most ``max_dim`` pixels.  The full-resolution ``.bin`` is always
     cached on disk; downsampling is applied on the fly before sending the response.
+
+    Pass ``bbox`` (``west,south,east,north``) to receive only the pixels enclosing it;
+    the crop is cut from the cached canvas before ``max_dim`` is applied, so the result
+    matches ``/meta`` for the same ``bbox`` and ``max_dim``.
     """
+    # Resolve the output grid first, so a bad bbox is rejected before any mosaic build.
+    full_meta = _full_dataset_meta(dataset_id)
+    grid = _window_grid(full_meta, max_dim, _parse_bbox(bbox))
+
     root = _fused_zarr_root()
     policy_prefix, dx, dy, cluster_bbox = _parse_dataset_id(root, dataset_id)
     policy_dir = _resolve_policy_dir(root, policy_prefix)
@@ -575,7 +707,7 @@ async def get_elevation_binary(
         logger.info(f"DEM mosaic cache hit: {cache_bin.name}")
         content = cache_bin.read_bytes()
     else:
-        meta = await get_dataset_meta(dataset_id, max_dim=None)
+        meta = full_meta
 
         # Scan cells to get canvas extents and natural (uncapped) pixel count
         x_min = float("inf")
@@ -634,16 +766,11 @@ async def get_elevation_binary(
         except Exception as e:
             logger.warning(f"Failed to cache mosaic: {e}")
 
-    # --- LoD downsampling (viewer-level, applied on top of the build-capped binary) ---
-    meta_for_lod = await get_dataset_meta(dataset_id, max_dim=None)
-    full_w, full_h = meta_for_lod["full_width"], meta_for_lod["full_height"]
-    out_w, out_h, _scale = _clamp_dims(full_w, full_h, max_dim)
-
-    if out_w != full_w or out_h != full_h:
-        canvas = np.frombuffer(content, dtype=np.float32).reshape(full_h, full_w)
-        canvas = _downsample_nearest(canvas, out_h, out_w)
-        content = canvas.tobytes()
-        logger.info(f"Elevation LoD: {full_w}x{full_h} -> {out_w}x{out_h} (max_dim={max_dim})")
+    # --- bbox crop, then LoD downsampling, on top of the build-capped binary ---
+    out_w, out_h = grid["width"], grid["height"]
+    content = _slice_and_downsample(content, np.float32, full_meta, grid)
+    if bbox is not None or max_dim is not None:
+        logger.info(f"Elevation window {grid['window']} -> {out_w}x{out_h} (bbox={bbox}, max_dim={max_dim})")
 
     return Response(
         content=content,
@@ -659,15 +786,20 @@ async def get_elevation_binary(
 @router.get("/datasets/{dataset_id}/provenance.bin")
 async def get_provenance_binary(
     dataset_id: str,
-    max_dim: int | None = Query(None, ge=64, le=16384, description="Cap grid dimensions for LoD rendering"),
+    max_dim: MaxDim = None,
+    bbox: BBox = None,
 ) -> Response:
     """Return the mosaiced source_elevation grid as a raw Uint32 binary (north-first).
 
     Each pixel stores a source ID integer that maps to a provider name via the
     policy_legend in the dataset metadata. 0 = no data.
 
-    Pass ``max_dim`` to receive a nearest-neighbour downsampled grid (categorical-safe).
+    Pass ``max_dim`` to receive a nearest-neighbour downsampled grid (categorical-safe),
+    and ``bbox`` to crop first, as for ``elevation.bin``.
     """
+    full_meta = _full_dataset_meta(dataset_id)
+    grid = _window_grid(full_meta, max_dim, _parse_bbox(bbox))
+
     root = _fused_zarr_root()
     policy_prefix, dx, dy, cluster_bbox = _parse_dataset_id(root, dataset_id)
     policy_dir = _resolve_policy_dir(root, policy_prefix)
@@ -752,16 +884,11 @@ async def get_provenance_binary(
         except Exception as e:
             logger.warning(f"Failed to cache provenance mosaic: {e}")
 
-    # --- LoD downsampling ---
-    meta_for_dims = await get_dataset_meta(dataset_id, max_dim=None)
-    full_w, full_h = meta_for_dims["full_width"], meta_for_dims["full_height"]
-    out_w, out_h, _scale = _clamp_dims(full_w, full_h, max_dim)
-
-    if out_w != full_w or out_h != full_h:
-        canvas_u32 = np.frombuffer(content, dtype=np.uint32).reshape(full_h, full_w)
-        canvas_u32 = _downsample_nearest(canvas_u32, out_h, out_w)
-        content = canvas_u32.tobytes()
-        logger.info(f"Provenance LoD: {full_w}x{full_h} -> {out_w}x{out_h} (max_dim={max_dim})")
+    # --- bbox crop, then LoD downsampling ---
+    out_w, out_h = grid["width"], grid["height"]
+    content = _slice_and_downsample(content, np.uint32, full_meta, grid)
+    if bbox is not None or max_dim is not None:
+        logger.info(f"Provenance window {grid['window']} -> {out_w}x{out_h} (bbox={bbox}, max_dim={max_dim})")
 
     return Response(
         content=content,
@@ -782,9 +909,9 @@ async def get_dataset_quality(
     """Return quality report computed over the cached full-mosaic DEM without executing any fusion."""
     try:
         # Re-use metadata and trigger mosaic building if missing
-        meta = await get_dataset_meta(dataset_id, max_dim=None)
-        elev_resp = await get_elevation_binary(dataset_id, max_dim=None)
-        prov_resp = await get_provenance_binary(dataset_id, max_dim=None)
+        meta = await get_dataset_meta(dataset_id, max_dim=None, bbox=None)
+        elev_resp = await get_elevation_binary(dataset_id, max_dim=None, bbox=None)
+        prov_resp = await get_provenance_binary(dataset_id, max_dim=None, bbox=None)
 
         full_h = meta["full_height"]
         full_w = meta["full_width"]
