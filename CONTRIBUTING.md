@@ -116,13 +116,21 @@ For a persistent fix, you may need to configure `limit maxfiles` via `launchctl`
 
 ### Pre-commit hooks
 
-We use [pre-commit](https://pre-commit.com/) for formatting, linting, and type checks.
+We use [pre-commit](https://pre-commit.com/) for formatting, linting, and type checks. CI's Lint job runs the same hooks from `.pre-commit-config.yaml` on every push, so run them locally first.
+
+Enable the repository's git hooks once per clone:
 
 ```bash
-pip install pre-commit
-pre-commit install
-pre-commit run --all-files
+git config core.hooksPath .githooks
 ```
+
+The `pre-commit` hook checks staged files before each commit, and the `pre-push` hook runs every hook on the whole tree before each push, as CI does. The mypy hook needs `mypy` on `PATH` with the project's packages importable. An activated environment that has `pre-commit` and `mypy` (the micromamba setup, plus `pip install pre-commit`) is used as is; otherwise the hooks run both through [uv](https://docs.astral.sh/uv/) over the project's `.venv`. To run them by hand:
+
+```bash
+.githooks/run-hooks run --all-files
+```
+
+Local package versions can differ from CI's micromamba environment, so mypy may still report something in CI that it did not report locally.
 
 ### Type checking
 

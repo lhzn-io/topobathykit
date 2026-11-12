@@ -1,0 +1,3 @@
+#!/bin/sh
+# Lint and type-check the staged files before each commit.
+exec "$(dirname "$0")/run-hooks" run --hook-stage pre-commit

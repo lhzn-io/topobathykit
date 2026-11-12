@@ -1,0 +1,3 @@
+#!/bin/sh
+# Run every hook on the whole tree before a push, exactly as CI's Lint job does.
+exec "$(dirname "$0")/run-hooks" run --all-files --show-diff-on-failure

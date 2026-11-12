@@ -1,0 +1,21 @@
+#!/bin/sh
+# Shared runner for the git hooks in this directory. Runs the hooks from
+# .pre-commit-config.yaml, the same set CI's Lint job runs.
+#
+# The mypy hook is language: system, so mypy must be on PATH and see the
+# project's packages. An activated environment that has both mypy and
+# pre-commit (the micromamba setup) is used as is; otherwise uv runs them over
+# the project's .venv without changing it.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+if command -v pre-commit >/dev/null 2>&1 && command -v mypy >/dev/null 2>&1; then
+    exec pre-commit "$@"
+elif command -v uv >/dev/null 2>&1; then
+    exec uv run --no-sync --with mypy --with pre-commit pre-commit "$@"
+else
+    echo "git hook: need pre-commit and mypy on PATH, or uv; see CONTRIBUTING.md" >&2
+    exit 1
+fi
