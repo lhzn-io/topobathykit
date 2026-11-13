@@ -57,11 +57,11 @@ dependencies:
   - ipykernel
   # Documentation
   - sphinx
-  - sphinx-rtd-theme
   - myst-parser
   - sphinxcontrib-mermaid
   # pip-only (stale or missing on conda-forge)
   - pip:
       - httpx
       - pydap
+      - lhzn-sphinx-theme>=0.1,<0.2
       - -e .

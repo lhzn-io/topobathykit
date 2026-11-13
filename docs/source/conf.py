@@ -15,7 +15,6 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx.ext.mathjax",
-    "sphinx_rtd_theme",
     "myst_parser",
     "sphinxcontrib.mermaid",
 ]
@@ -23,7 +22,12 @@ extensions = [
 templates_path = ["_templates"]
 exclude_patterns: list[str] = []
 
-html_theme = "sphinx_rtd_theme"
+html_theme = "lhzn"
+html_theme_options = {
+    "source_repository": "https://github.com/lhzn-io/topobathykit",
+    "source_branch": "main",
+    "source_directory": "docs/source/",
+}
 html_static_path = ["_static"]
 html_extra_path = ["_extra"]
 
