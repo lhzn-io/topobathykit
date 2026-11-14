@@ -144,7 +144,11 @@ MOSAIC_BUILD_MAX_DIM = 8192
 
 # Recorded in each mosaic sidecar; a sidecar written by another version is rebuilt.
 # 2: short gaps filled as in /fuse (#40).
-MOSAIC_VERSION = 2
+# 3: elevation downsampled by area average, not nearest neighbor, when the build is capped (#59).
+MOSAIC_VERSION = 3
+
+# Rows (or columns) per block when area-averaging, bounding the float64 working set.
+_AREA_BLOCK = 256
 
 
 def _downsample_nearest(arr: np.ndarray, new_h: int, new_w: int) -> np.ndarray:
@@ -152,6 +156,51 @@ def _downsample_nearest(arr: np.ndarray, new_h: int, new_w: int) -> np.ndarray:
     row_idx = np.round(np.linspace(0, arr.shape[0] - 1, new_h)).astype(np.intp)
     col_idx = np.round(np.linspace(0, arr.shape[1] - 1, new_w)).astype(np.intp)
     return arr[np.ix_(row_idx, col_idx)]
+
+
+def _area_sums(arr: np.ndarray, n_out: int, axis: int) -> np.ndarray:
+    """Coverage-weighted sums along *axis* into *n_out* equal bins spanning the whole axis.
+
+    Each output bin covers ``n / n_out`` native cells; a native cell cut by a bin edge counts by
+    the fraction inside the bin. Computed from a cumulative sum read at the fractional edges, in
+    blocks of ``_AREA_BLOCK`` along the other axis.
+    """
+    n = arr.shape[axis]
+    edges = np.linspace(0.0, n, n_out + 1)
+    i0 = np.minimum(np.floor(edges).astype(np.intp), n - 1)
+    frac = edges - i0
+    moved = np.moveaxis(arr, axis, -1)
+    out = np.empty((moved.shape[0], n_out), dtype=np.float64)
+    for r0 in range(0, moved.shape[0], _AREA_BLOCK):
+        blk = moved[r0 : r0 + _AREA_BLOCK].astype(np.float64)
+        csum = np.zeros((blk.shape[0], n + 1), dtype=np.float64)
+        np.cumsum(blk, axis=1, out=csum[:, 1:])
+        at_edges = csum[:, i0] + frac * blk[:, i0]
+        out[r0 : r0 + _AREA_BLOCK] = np.diff(at_edges, axis=1)
+    return np.moveaxis(out, -1, axis)
+
+
+def _downsample_mean(arr: np.ndarray, new_h: int, new_w: int) -> np.ndarray:
+    """Area-average resample a 2-D float array to (new_h, new_w), ignoring NaN.
+
+    Each output cell is the mean of the native cells it covers, partial cells weighted by the
+    fraction covered; a cell with no finite native data stays NaN. Nearest-neighbor decimation
+    by a non-integer factor keeps unevenly spaced cells, which ribs smooth slopes and aliases fine
+    survey texture (#59); the area mean keeps every output cell centered on its footprint.
+    """
+    finite = np.isfinite(arr)
+    total = _area_sums(_area_sums(np.where(finite, arr, 0.0), new_w, axis=1), new_h, axis=0)
+    count = _area_sums(_area_sums(finite.astype(np.float64), new_w, axis=1), new_h, axis=0)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = np.where(count > 1e-9, total / count, np.nan)
+    return mean.astype(arr.dtype)
+
+
+def _downsample(arr: np.ndarray, new_h: int, new_w: int) -> np.ndarray:
+    """Elevation (float) by area average; integer grids such as source ids by nearest neighbor."""
+    if np.issubdtype(arr.dtype, np.floating):
+        return _downsample_mean(arr, new_h, new_w)
+    return _downsample_nearest(arr, new_h, new_w)
 
 
 def _clamp_dims(width: int, height: int, max_dim: int | None) -> tuple[int, int, float]:
@@ -270,7 +319,7 @@ def _slice_and_downsample(content: bytes, dtype: type, meta: dict[str, Any], gri
         return content
     canvas: np.ndarray = np.frombuffer(content, dtype=dtype).reshape(full_h, full_w)[row0:row1, col0:col1]
     if canvas.shape != (out_h, out_w):
-        canvas = _downsample_nearest(canvas, out_h, out_w)
+        canvas = _downsample(canvas, out_h, out_w)
     return np.ascontiguousarray(canvas).tobytes()
 
 
@@ -356,7 +405,7 @@ def _mosaic_to_bin(
             if build_scale < 0.999:
                 new_w = max(1, col_end_c - col_start + 1)
                 new_h = max(1, row_end_c - row_start + 1)
-                elev = _downsample_nearest(elev, new_h, new_w)
+                elev = _downsample_mean(elev, new_h, new_w)
 
             # Clip to canvas bounds (handles halo overlap)
             src_r0 = max(0, -row_start)
